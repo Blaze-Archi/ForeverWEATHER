@@ -207,10 +207,10 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
                         float3 amb = rpSprayAmbient();
                         float mistL = max(max(rpLuma(amb) * 1.15, envL * 0.9), max(rpLuma(src.rgb) * 0.9, 0.06));
                         float3 mist = float3(0.82, 0.87, 0.93) * mistL;
-                        // 1.0: a lighter mist (in-game feedback: too thick): thinner and never more than 40 % opaque
-                        float alpha = saturate((1.0 - exp(-dens * 0.7)) * strength);
-                        col = lerp(col, mist, min(alpha, 0.4));
-                        col += mist * (0.05 * alpha) + float3(1.0, 1.0, 1.0) * (spark * mistL * 1.2 * saturate(strength));
+                        // 1.0: a light mist (in-game feedback, twice: too thick): thin and never more than 28 % opaque
+                        float alpha = saturate((1.0 - exp(-dens * 0.5)) * strength);
+                        col = lerp(col, mist, min(alpha, 0.28));
+                        col += mist * (0.03 * alpha) + float3(1.0, 1.0, 1.0) * (spark * mistL * 0.8 * saturate(strength));
                         dbgDens = max(dbgDens, alpha);
                     }
                 }

@@ -23,8 +23,9 @@ local TAG = 'rainPuddlesWet'
 
 local SSR_QUALITY = { [1] = 'Low', [2] = 'Medium', [3] = 'High' }
 local MAX_LAYERS = 4
-local APPLY_INTERVAL = 1.0      -- s between material rewrites (reload is not free)
-local APPLY_STEP = 0.05         -- minimum change in wetness that triggers a rewrite
+local APPLY_INTERVAL = 2.0      -- s between material rewrites (1.0: was 1 s; reload is not free)
+local APPLY_STEP = 0.05         -- minimum change of the roughness multiplier that triggers a rewrite
+local APPLY_BUDGET_MS = 1.0     -- 1.0: rewrite time per frame (at least one material per frame)
 local SSR_INTERVAL = 1.0
 
 local st = {
@@ -138,31 +139,57 @@ local function rescan()
   if st.matCount == 0 then st.status = 'no road materials found on this level' end
 end
 
--- mult = 1 restores the exact original values
+-- One material: its layers' roughnessFactor scaled by mult (mult = 1 restores the exact original values), then reloaded.
+-- 1.0: a reload costs about 3.5 ms per material (measured on West Coast USA: all 59 road materials at once blocked the
+-- game for 205-225 ms each time, which was the stutter), so rewrites are spread over frames (st.job).
+local function rewriteMaterial(name, rec, mult)
+  local m = scenetree.findObject(name)
+  if not (m and rec) then return false end
+  local touched = false
+  for l, orig in pairs(rec.layers) do
+    local v = orig
+    if mult < 0.999 then v = math.min(orig, math.max(orig * mult, 0.03)) end   -- never raises a value
+    local okS, err = pcall(function() m:setField('roughnessFactor', l, string.format('%.4f', v)) end)
+    if okS then touched = true else st.lastErr = tostring(err) end
+  end
+  if not touched then return false end
+  local okR, errR = pcall(function() m:reload() end)
+  if not okR then okR, errR = pcall(function() m:flush() end) end
+  if not okR then st.lastErr = tostring(errR) end
+  return okR
+end
+
+-- all at once: only to put the originals back (level change, mode switched, unloading)
 local function applyRoughnessMultiplier(mult)
+  st.job = nil
   local ok, bad = 0, 0
   for name, rec in pairs(st.mats) do
-    local m = scenetree.findObject(name)
-    if m then
-      local touched = false
-      for l, orig in pairs(rec.layers) do
-        local v = orig
-        if mult < 0.999 then v = math.min(orig, math.max(orig * mult, 0.03)) end   -- never raises a value
-        local okS, err = pcall(function() m:setField('roughnessFactor', l, string.format('%.4f', v)) end)
-        if okS then touched = true else st.lastErr = tostring(err) end
-      end
-      if touched then
-        local okR, errR = pcall(function() m:reload() end)
-        if not okR then okR, errR = pcall(function() m:flush() end) end
-        if okR then ok = ok + 1 else bad = bad + 1; st.lastErr = tostring(errR) end
-      else
-        bad = bad + 1
-      end
-    else
-      bad = bad + 1
-    end
+    if rewriteMaterial(name, rec, mult) then ok = ok + 1 else bad = bad + 1 end
   end
   st.okCount, st.failCount = ok, bad
+end
+
+-- 1.0: a rewrite spread over the next frames, APPLY_BUDGET_MS per frame (at least one material)
+local function startJob(mult)
+  local names = {}
+  for name in pairs(st.mats) do names[#names + 1] = name end
+  st.job = { mult = mult, names = names, i = 1, ok = 0, bad = 0 }
+end
+
+local function stepJob()
+  local job = st.job
+  if not job then return end
+  local t0 = os.clock()
+  repeat
+    local name = job.names[job.i]
+    if not name then break end
+    job.i = job.i + 1
+    if rewriteMaterial(name, st.mats[name], job.mult) then job.ok = job.ok + 1 else job.bad = job.bad + 1 end
+  until (os.clock() - t0) * 1000 >= APPLY_BUDGET_MS
+  if job.i > #job.names then
+    st.okCount, st.failCount = job.ok, job.bad
+    st.job = nil
+  end
 end
 
 local function restoreMaterials()
@@ -201,18 +228,14 @@ end
 M.nativeFilm = function(cfg)
   local mode = math.floor((tonumber(cfg.reflectionMode) or 0) + 0.5)
   if mode == 2 then return 0 end           -- "Own SSR only"
-  if mode == 1 then return 1 end           -- "Native only"
-  -- 1.0: roofs / a tunnel near the camera (see M.update): the mod's own film, which keeps covered ground dry
-  if st.dryNear then return 0 end
-  -- Auto: only once the materials really changed (1.0: and carry at least half the wetness they are heading for, so
-  -- after a tunnel the mod's own film covers the road until they are wet again)
-  if st.okCount > 0 and st.appliedWet > 0.05 and st.appliedWet >= 0.5 * (st.target or 0) then return 1 end
-  return 0
+  if mode == 1 then return 1 end           -- "Native PBR + SSR"
+  return 0                                 -- 1.0 Auto: the mod's own film (see M.update)
 end
 
--- dryNear (1.0): a roof or a tunnel right above / near the camera (rainPuddles' shelter grid). The road materials are
--- shared by every road of the level, so wet ones would shine inside the tunnel too: in Auto mode they dry quickly then,
--- and the mod's own screen-space film (which keeps covered ground dry) carries the wet road meanwhile.
+-- 1.0: only the "Native PBR + SSR" mode (reflectionMode 1) changes the road materials. Auto no longer does: the
+-- wetness changes all the time (rain, flood, tunnels: the materials are shared by every road of the level, so wet ones
+-- also shone in tunnels), each rewrite stalled the game, and the mod's own film draws the same wet road without that
+-- (and keeps covered ground dry). dryNear (roofs near the camera) is no longer used here.
 M.update = function(dt, rain, cfg, flood, dryNear)
   dt = tonumber(dt) or 0
   st.clock = st.clock + dt
@@ -223,22 +246,21 @@ M.update = function(dt, rain, cfg, flood, dryNear)
     st.level = lvl
     st.mats, st.matCount, st.okCount, st.failCount = {}, 0, 0, 0   -- objects of the old level are gone
     st.appliedWet, st.wet, st.lastScan = -1, 0, -1e9
-    st.appliedMult, st.settingKey = 1, nil
+    st.appliedMult, st.settingKey, st.job = 1, nil, nil
     st.status = 'idle'
   end
+  stepJob()
 
   local mode = math.floor((tonumber(cfg.reflectionMode) or 0) + 0.5)
-  local enabled = cfg.enabled and cfg.wetGround ~= false and cfg.wetRoadMaterials and mode ~= 2
+  local enabled = cfg.enabled and cfg.wetGround ~= false and cfg.wetRoadMaterials and mode == 1
   rain = clamp(tonumber(rain) or 0, 0, 1)
   local target = 0
   local wetScale = clamp(tonumber(cfg.roadWetness) or 1, 0, 1)
   if enabled and rain > 0.02 then target = (rain ^ 0.7) * wetScale end
-  st.dryNear = (dryNear and mode == 0) and true or false
-  if st.dryNear then target = 0 end
   st.target = target
 
-  -- smooth wetness: gets wet in a few seconds, dries more slowly (1.0: in a second near a tunnel)
-  local rate = (target > st.wet) and 0.25 or (st.dryNear and 3.0 or 0.08)
+  -- smooth wetness: gets wet in a few seconds, dries more slowly
+  local rate = (target > st.wet) and 0.25 or 0.08
   st.wet = st.wet + (target - st.wet) * (1 - math.exp(-rate * dt))
   if math.abs(target - st.wet) < 0.003 then st.wet = target end
 
@@ -259,23 +281,27 @@ M.update = function(dt, rain, cfg, flood, dryNear)
   local diff = math.abs(mult - (st.appliedMult or 1))
   local settingKey = string.format('%.3f|%.3f|%.3f', wetRough, strength, floodRough)
   local drying = (st.wet == 0 and st.appliedWet > 0)
-  -- slider edits apply after 0.25 s, rain-driven changes at most once per second (reload is not free)
+  -- slider edits apply after 0.25 s, rain-driven changes at most every 2 s and in steps of 0.05 (1.0), each spread
+  -- over the next frames
   local interval = (settingKey ~= st.settingKey) and 0.25 or APPLY_INTERVAL
-  if st.matCount > 0 and st.clock - st.lastApply >= interval and (diff >= 0.02 or drying) then
+  if enabled and not st.job and st.matCount > 0 and st.clock - st.lastApply >= interval
+     and (diff >= APPLY_STEP or drying or (settingKey ~= st.settingKey and diff >= 0.005)) then
     st.lastApply = st.clock
-    applyRoughnessMultiplier(mult)
+    startJob(mult)
+    stepJob()
     st.appliedWet = st.wet
     st.appliedMult = mult
     st.settingKey = settingKey
-    if st.okCount > 0 then
-      st.status = string.format('ok: %d/%d road materials, %.0f%% wet, roughness x%.2f%s', st.okCount, st.matCount,
-        st.wet * 100, mult, flood > 0.01 and string.format(', %.0f%% flooded', flood * 100) or '')
-    else
-      st.status = 'material API did not accept the change' .. (st.lastErr and (' (' .. st.lastErr .. ')') or '')
-    end
+    st.status = string.format('ok: %d road materials, %.0f%% wet, roughness x%.2f%s', st.matCount,
+      st.wet * 100, mult, flood > 0.01 and string.format(', %.0f%% flooded', flood * 100) or '')
   elseif not enabled and st.appliedWet ~= -1 then
     restoreMaterials()
     st.status = 'restored'
+  elseif not enabled and mode ~= 1 then
+    st.status = 'not used: the mod draws the wet road (Auto / Own)'
+  end
+  if enabled and st.okCount == 0 and st.failCount > 0 and not st.job then
+    st.status = 'material API did not accept the change' .. (st.lastErr and (' (' .. st.lastErr .. ')') or '')
   end
 
   if st.clock - st.lastSsr >= SSR_INTERVAL then

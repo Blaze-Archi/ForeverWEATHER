@@ -26,7 +26,7 @@ local TAG = 'rainPuddles'
 -- shader file changed (measured: edited shaders kept running in their old form across restarts until that cache was
 -- cleared). A new path makes every player's game compile the 1.0 shaders instead of reusing cached 0.9 ones.
 -- Rename the folder again whenever the shaders change in a release.
-local shaderDir = 'shaders/common/postFx/rainPuddles20/'
+local shaderDir = 'shaders/common/postFx/rainPuddles21/'
 local maskDir = '/art/rainPuddles/'
 local wiperMaskPath = maskDir .. 'wiper_sweep.data.png'
 local settingsFile = '/settings/rainPuddles.json'
@@ -59,7 +59,7 @@ local PRECIP_HEAVY = 'RainPuddles_NativeRain'
 local PRECIP_FINE  = 'RainPuddles_NativeSpray'
 
 local defaults = {
-  settingsVersion = 19,
+  settingsVersion = 20,
   enabled = true,
   wetGround = true,          -- 0.7: global wet ground on/off, independent of the puddles
   puddles = true,
@@ -165,12 +165,19 @@ local defaults = {
   lensInCockpit = false,     -- cockpit views already have the windshield layer
 
   -- Tyre spray
-  splashIntensity = 0.50,   -- 1.0: was 0.80 (the mist was too thick)
+  splashIntensity = 0.30,   -- 1.0: was 0.80, then 0.50 (the mist was too thick)
   splashSize = 1.0,
   splashSpeedMin = 6.0,
   splashPuddle = 0.35,
   tyreWakes = 1.00,          -- 0.9: waves and churned water behind tyres rolling through puddles
   trafficSpray = true,       -- 0.9: spray and wakes from other vehicles too (up to 8 tyres in total)
+
+  -- 1.0 hydroplaning (node-based, in each car's own Lua: lua/vehicle/extensions/rainPuddlesHydroVeh.lua)
+  hydroplaning = 2,          -- 0 off, 1 arcade, 2 simcade, 3 sim
+  hydroStrength = 1.0,       -- scales the water's lift and drag
+  hydroTread = 7.0,          -- tread depth (mm) of ordinary tyres (slicks, semi-slicks, race and off-road tyres are known)
+  hydroTraffic = true,       -- other cars hydroplane too (within 400 m)
+  hydroDebug = false,        -- draw every contact-patch node: blue = water under it, red = load the water carries
 
   -- Native precipitation / dynamic scaling
   precipMaxDrops = 12000,
@@ -262,6 +269,9 @@ local ranges = {
   splashSpeedMin = { 0, 40 },
   splashPuddle = { 0, 1 },
   tyreWakes = { 0, 2 },
+  hydroplaning = { 0, 3 },
+  hydroStrength = { 0, 2 },
+  hydroTread = { 0, 12 },
 
   precipMaxDrops = { 0, 24000 },
 
@@ -517,6 +527,11 @@ local function loadSettings()
         if cur == nil or math.abs(cur - v) < 1e-6 then S[k] = defaults[k] end
       end
       if data.stochasticGloss ~= true then S.stochasticGloss = defaults.stochasticGloss end
+    end
+    if (tonumber(data.settingsVersion) or 0) < 20 then
+      -- 1.0: an even lighter tyre spray by default (in-game feedback); a strength the player picked is kept
+      local cur = tonumber(data.splashIntensity)
+      if cur == nil or math.abs(cur - 0.50) < 1e-6 or math.abs(cur - 0.80) < 1e-6 then S.splashIntensity = defaults.splashIntensity end
     end
     if (tonumber(data.settingsVersion) or 0) < 17 then
       -- 1.0: the mod's own GPU rain replaces BeamNG's particle rain, which was on by default and cost a lot of CPU
@@ -2846,42 +2861,70 @@ local function updateRoadSegments()
   roads.segs, roads.strA, roads.strB = {}, {}, {}
   local okM, m = pcall(function() return map and map.getMap and map.getMap() end)
   if not okM or type(m) ~= 'table' or type(m.nodes) ~= 'table' then roads.mode, roads.nodes = 2, 0 return end
-  local R = math.max(S.maxDistance or 140, 40) + 15
-  local cand, n = {}, 0
-  for name, nd in pairs(m.nodes) do
-    n = n + 1
-    local p = type(nd) == 'table' and nd.pos
-    local links = type(nd) == 'table' and (nd.links or (m.graph and m.graph[name]))
-    if p and type(links) == 'table' then
-      local dx, dy = p.x - cam.x, p.y - cam.y
-      if dx * dx + dy * dy < (R + 120) * (R + 120) then
+  -- 1.0: every road link of the level once, bucketed in 64 m cells (rebuilt for a new level / map). The old code walked
+  -- all nodes on every refresh (about 8,500 on West Coast USA: 1.5-5 ms, one to four times a second while driving).
+  local lvl = nil
+  pcall(function() lvl = getCurrentLevelIdentifier() end)
+  local idx = roads.index
+  if not idx or idx.map ~= m or idx.level ~= lvl or idx.nodes == 0 then
+    idx = { map = m, level = lvl, nodes = 0, cells = {}, size = 64 }
+    local size = idx.size
+    for name, nd in pairs(m.nodes) do
+      idx.nodes = idx.nodes + 1
+      local p = type(nd) == 'table' and nd.pos
+      local links = type(nd) == 'table' and (nd.links or (m.graph and m.graph[name]))
+      if p and type(links) == 'table' then
         local sName = tostring(name)
         for other in pairs(links) do
           if sName < tostring(other) then                 -- every road link once
             local o = m.nodes[other]
             local q = type(o) == 'table' and o.pos
             if q then
-              -- distance from the camera to the segment (2D)
-              local ex, ey = q.x - p.x, q.y - p.y
-              local l2 = ex * ex + ey * ey
-              local t = l2 > 1e-6 and clamp(((cam.x - p.x) * ex + (cam.y - p.y) * ey) / l2, 0, 1) or 0
-              local sx, sy = p.x + ex * t - cam.x, p.y + ey * t - cam.y
-              local d2 = sx * sx + sy * sy
-              if d2 < R * R then
-                cand[#cand + 1] = { d2 = d2, p = p, q = q, ra = tonumber(nd.radius) or 4, rb = tonumber(o.radius) or 4 }
+              local seg = { p = p, q = q, ra = tonumber(nd.radius) or 4, rb = tonumber(o.radius) or 4 }
+              for cx = math.floor(math.min(p.x, q.x) / size), math.floor(math.max(p.x, q.x) / size) do
+                for cy = math.floor(math.min(p.y, q.y) / size), math.floor(math.max(p.y, q.y) / size) do
+                  local key = cx * 100003 + cy
+                  local c = idx.cells[key]
+                  if not c then c = {} idx.cells[key] = c end
+                  c[#c + 1] = seg
+                end
               end
             end
           end
         end
       end
     end
+    roads.index = idx
   end
-  roads.nodes = n
-  if n == 0 then roads.mode = 2 return end
+  roads.nodes = idx.nodes
+  if idx.nodes == 0 then roads.mode = 2 return end
   roads.mode = 1
-  table.sort(cand, function(a, b) return a.d2 < b.d2 end)
+  local R = math.max(S.maxDistance or 140, 40) + 15
+  local size = idx.size
+  local cand, seen = {}, {}
+  for cx = math.floor((cam.x - R) / size), math.floor((cam.x + R) / size) do
+    for cy = math.floor((cam.y - R) / size), math.floor((cam.y + R) / size) do
+      local c = idx.cells[cx * 100003 + cy]
+      if c then
+        for _, seg in ipairs(c) do
+          if not seen[seg] then
+            seen[seg] = true
+            -- distance from the camera to the segment (2D)
+            local p, q = seg.p, seg.q
+            local ex, ey = q.x - p.x, q.y - p.y
+            local l2 = ex * ex + ey * ey
+            local t = l2 > 1e-6 and clamp(((cam.x - p.x) * ex + (cam.y - p.y) * ey) / l2, 0, 1) or 0
+            local sx, sy = p.x + ex * t - cam.x, p.y + ey * t - cam.y
+            local d2 = sx * sx + sy * sy
+            if d2 < R * R then cand[#cand + 1] = { d2 = d2, seg = seg } end
+          end
+        end
+      end
+    end
+  end
+  table.sort(cand, function(x, y) return x.d2 < y.d2 end)
   for i = 1, math.min(#cand, ROAD_SEGS) do
-    local c = cand[i]
+    local c = cand[i].seg
     roads.segs[i] = c
     roads.strA[i] = fmt4(c.p.x, c.p.y, c.p.z, c.ra)
     roads.strB[i] = fmt4(c.q.x, c.q.y, c.q.z, c.rb)
@@ -3668,6 +3711,7 @@ end
 
 local function onExtensionLoaded()
   if extensions and not extensions.rainPuddlesWet then pcall(extensions.load, 'rainPuddlesWet') end
+  if extensions and not extensions.rainPuddlesHydro then pcall(extensions.load, 'rainPuddlesHydro') end   -- 1.0
   loadSettings()
   updateCamera()
   rebuild()
@@ -3838,6 +3882,7 @@ M.getDiagnostics = function()
     time = T,
     version = VERSION,
     wet = wetCall('getStatus'),
+    hydro = (extensions.rainPuddlesHydro and extensions.rainPuddlesHydro.getStatus) and extensions.rainPuddlesHydro.getStatus() or nil,
     rayCast = (type(castRayStatic) == 'function'),
     nativeFilm = tonumber(wetCall('nativeFilm', S)) or 0,   -- 1 = the ground reflection is drawn by BeamNG's PBR + SSR
     groundWetness = groundWetness(),
@@ -4237,6 +4282,91 @@ M.status = function()
   log('I', TAG, string.format('  wiper active=%s running=%s cycles=%d, windshieldPlane=%s, cam=%s cockpit=%s',
     tostring(wiper.active), tostring(wiper.running), wiper.cycles, tostring(windshield ~= nil), tostring(cam.name), tostring(cam.cockpit)))
 end
+
+-- 1.0 hydroplaning: what the cars need from this side (rainPuddlesHydro.lua passes it on) --------------------------------
+-- The water: a film on every wet hard surface (deeper in heavy rain and as the road floods) and the puddles, with the
+-- same field the puddle shader draws (coverage, size, softness and tiling as in puddleConsts, the same two masks).
+M.hydroEnv = function()
+  local rain = clamp(S.rain, 0, 1)
+  local ground, water, flood = groundWetness(), puddleWater(), floodAmount()
+  local mode = S.enabled and clamp(round(tonumber(S.hydroplaning) or 0), 0, 3) or 0
+  local size = S.puddleSize * (0.92 + 0.16 * water)
+  local function field(i) return (MASK_FILES[i] or MASK_FILES[1]):gsub('%.data%.png$', '.field') end
+  return {
+    enabled = mode > 0, mode = mode, strength = S.hydroStrength or 1, tread = S.hydroTread or 7,
+    traffic = S.hydroTraffic and true or false, debug = S.hydroDebug and true or false,
+    puddles = (S.puddles and ground > 0) and true or false,
+    roadsOnly = (S.puddleRoadsOnly and roads.mode == 1) and true or false,
+    tile = math.max(S.tileSize or 44, 2), cov = clamp(S.puddleCoverage * (0.18 + 0.82 * (water ^ 0.72)), 0, 1),
+    sizeWarp = 0.58 + 0.76 * clamp(size, 0, 1), soft = math.max(S.puddleSoftness or 0.035, 0.004),
+    fieldA = field(S.maskA), fieldB = field(S.maskB),
+    -- metres: film 0.15 mm (damp) .. 1.2 mm (downpour) + up to 2 mm as the road floods; puddles up to 9 mm deep at
+    -- their centre (a deep rut), half as deep again on a flooding road (tested: 15 mm made every puddle a spin at 100 km/h)
+    hFilm = ground * (0.00015 + 0.00105 * rain ^ 0.8) + 0.002 * flood * ground,
+    hPuddle = (S.puddles and 1 or 0) * (0.003 + 0.006 * water) * (1 + 0.5 * flood),
+  }
+end
+
+-- the nearest road lanes to a point: { {ax, ay, az, ra, bx, by, bz, rb}, ... } (as the puddle shader's segments)
+M.hydroRoads = function(x, y, z, n)
+  local idx = roads.index
+  if not idx then pcall(updateRoadSegments) idx = roads.index end
+  if not idx then return nil end
+  local size, R = idx.size, 12
+  local cand, seen = {}, {}
+  for cx = math.floor((x - R) / size), math.floor((x + R) / size) do
+    for cy = math.floor((y - R) / size), math.floor((y + R) / size) do
+      local c = idx.cells[cx * 100003 + cy]
+      if c then
+        for _, seg in ipairs(c) do
+          if not seen[seg] then
+            seen[seg] = true
+            local pp, qq = seg.p, seg.q
+            local ex, ey = qq.x - pp.x, qq.y - pp.y
+            local l2 = ex * ex + ey * ey
+            local t = l2 > 1e-6 and clamp(((x - pp.x) * ex + (y - pp.y) * ey) / l2, 0, 1) or 0
+            local sx, sy = pp.x + ex * t - x, pp.y + ey * t - y
+            local d2 = sx * sx + sy * sy
+            local zS = pp.z + (qq.z - pp.z) * t
+            if d2 < R * R and math.abs(zS - z) < 3 then cand[#cand + 1] = { d2 = d2, seg = seg } end
+          end
+        end
+      end
+    end
+  end
+  table.sort(cand, function(a, b) return a.d2 < b.d2 end)
+  local out = {}
+  for i = 1, math.min(#cand, n or 3) do
+    local g = cand[i].seg
+    out[i] = { g.p.x, g.p.y, g.p.z, g.ra, g.q.x, g.q.y, g.q.z, g.rb }
+  end
+  return out
+end
+
+-- 0..1 how covered (roof, bridge, tunnel) the ground at a point is: the shelter grid near the camera, an upward cast
+-- (cached a second per car) further away
+do
+local castCache = {}
+M.hydroCovered = function(x, y, z, vid)
+  local sp = RAIN.spacing
+  local dx, dy = x - rainSt.sox, y - rainSt.soy
+  if #rainSt.shelter == 81 and math.abs(dx) < 4 * sp and math.abs(dy) < 4 * sp then return rainSt.coveredAt(x, y, z) end
+  local key = (vid or 0) * 4096 + math.floor(x / 4) % 64 * 64 + math.floor(y / 4) % 64
+  local e = castCache[key]
+  if e and T - e.at < 1.0 then return e.c end
+  local c = 0
+  if type(castRayStatic) == 'function' then
+    local ok, d = pcall(castRayStatic, vec3(x, y, z + 1.0), vec3(0, 0, 1), 40)
+    if ok and type(d) == 'number' and d > 0.5 and d < 39.5 then c = 1 end
+  end
+  castCache[key] = { c = c, at = T }
+  if T - (castCache.prunedAt or 0) > 10 then
+    castCache.prunedAt = T
+    for k, v in pairs(castCache) do if type(v) == 'table' and T - v.at > 5 then castCache[k] = nil end end
+  end
+  return c
+end
+end -- do (hydroplaning helpers)
 
 M.onExtensionLoaded = onExtensionLoaded
 M.onExtensionUnloaded = onExtensionUnloaded

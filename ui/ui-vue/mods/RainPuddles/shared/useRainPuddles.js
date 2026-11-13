@@ -18,7 +18,7 @@ const state = reactive({
   loaded: false,
   error: "",
   transport: "",
-  open: { ground: true, puddles: true, weather: false, rainfx: false, droplets: false, lens: false, windshield: false, spray: false, debug: false },
+  open: { ground: true, puddles: true, weather: false, rainfx: false, droplets: false, lens: false, windshield: false, spray: false, hydro: false, debug: false },
 })
 
 let users = 0
@@ -260,13 +260,12 @@ export function useRainPuddles() {
     },
     selfTest: () => callExt("selfTest", [Number(state.s.debugMode) || 0]),
     versionOk: () => state.diag?.version === VERSION,
-    nativeActive: () => state.s.reflectionMode !== 2,
+    nativeActive: () => state.s.reflectionMode === 1,
     ownActive: () => state.s.reflectionMode !== 1,
     groundEngineText: () => {
       if (!state.loaded) return "unknown"
-      if (state.s.reflectionMode === 2) return "this mod's own trace (mode: own only)"
       if (Number(state.diag?.nativeFilm) > 0.5) return "BeamNG native PBR + SSR (road materials)"
-      return "this mod's own trace (native path not active yet)"
+      return "this mod's own trace"
     },
     ssrText: () => {
       const w = wet()
@@ -288,5 +287,14 @@ export function useRainPuddles() {
       return `active, speed ${((l.speed || 0) * 3.6).toFixed(0)} km/h, rain on lens ${(l.rain || 0).toFixed(2)}` + (l.sheltered ? ", sheltered" : "")
     },
     boxInfo: () => (Array.isArray(state.diag?.boxInfo) ? state.diag.boxInfo : []),
+    hydroText: () => {
+      const h = state.diag?.hydro
+      if (!h) return "Hydroplaning: unknown"
+      if (!h.enabled) return "Hydroplaning is off."
+      const film = `${(h.filmMm || 0).toFixed(1)} mm water film, puddles up to ${(h.puddleMm || 0).toFixed(0)} mm deep`
+      const t = Array.isArray(h.tyres) ? h.tyres : []
+      if (!t.length) return `${h.mode}: ${film}. Your car has not reported yet (${h.cars || 0} cars active).`
+      return `${h.mode}: ${film}. Your tyres: ` + t.map((x) => `${x.name} ${Math.round((x.lift || 0) * 100)} % on water (${(x.depthMm || 0).toFixed(1)} mm)`).join(", ")
+    },
   }
 }

@@ -20,9 +20,17 @@ export const PRESETS = [
   { k: "flooded", l: "Flooded" },
 ]
 
+// 1.0 hydroplaning (node-based, see lua/vehicle/extensions/rainPuddlesHydroVeh.lua)
+export const HYDRO_MODES = [
+  { v: 0, l: "Off" },
+  { v: 1, l: "Arcade" },
+  { v: 2, l: "Simcade" },
+  { v: 3, l: "Sim" },
+]
+
 export const REFLECTION_MODES = [
-  { v: 0, l: "Auto (native when it works)" },
-  { v: 1, l: "Native PBR + SSR only" },
+  { v: 0, l: "Auto (the mod's own film, smooth)" },
+  { v: 1, l: "Native PBR + SSR (changes road materials)" },
   { v: 2, l: "Own screen-space trace only" },
 ]
 
@@ -149,5 +157,9 @@ export const SLIDERS = {
     { k: "splashSpeedMin", l: "Minimum speed (m/s)", a: 0, b: 40, st: 0.5, d: 1 },
     { k: "splashPuddle", l: "Only on puddles", a: 0, b: 1, st: 0.01, d: 2, hint: "0 = spray from any wet road (more in puddles), 1 = only where a tyre runs through a puddle." },
     { k: "tyreWakes", l: "Tyre wakes in puddles", a: 0, b: 2, st: 0.05, d: 2, hint: "Churned water as wide as the tyre, bow waves and spin rings where tyres roll through puddles." },
+  ],
+  hydro: [
+    { k: "hydroStrength", l: "Water strength", a: 0, b: 2, st: 0.05, d: 2, hint: "Scales how much of the tyres' load the water carries and how hard it drags. 1 = the mode's own values." },
+    { k: "hydroTread", l: "Tread depth (mm)", a: 0, b: 12, st: 0.5, d: 1, hint: "For ordinary road tyres (new: 7-8, worn: 2-3). Slicks, semi-slicks, race and off-road tyres use their own depth. Deeper grooves drain more water before the tyre floats." },
   ],
 }

@@ -1,20 +1,32 @@
 <template>
   <div class="rp-select" :title="hint || ''">
     <div class="rp-select-label">{{ label }}</div>
-    <select :value="value" @change="$emit('change', Number($event.target.value))">
-      <option v-for="o in options" :key="o.v" :value="o.v">{{ o.l }}</option>
-    </select>
+    <!-- 1.0: the game's own dropdown. A native <select> never opens its list in the game's UI browser (it draws pop-ups
+         of native controls nowhere), so the dropdowns of the panel did nothing. -->
+    <BngDropdown class="rp-dropdown" :model-value="current" :items="items" @update:model-value="pick" />
   </div>
 </template>
 
 <script setup>
-defineProps({
+import { computed } from "vue"
+import { BngDropdown } from "@/common/components/base"
+
+const props = defineProps({
   label: { type: String, required: true },
   value: { type: [Number, String], default: 0 },
   options: { type: Array, required: true },
   hint: { type: String, default: "" },
 })
-defineEmits(["change"])
+const emit = defineEmits(["change"])
+
+// options use { v, l }; the game's dropdown takes { value, label } and matches the value exactly (numbers here)
+const items = computed(() => props.options.map(o => ({ value: Number(o.v), label: String(o.l) })))
+const current = computed(() => Number(props.value))
+
+function pick(v) {
+  const n = Number(v)
+  if (!Number.isNaN(n) && n !== current.value) emit("change", n)
+}
 </script>
 
 <style scoped lang="scss">
@@ -25,12 +37,7 @@ defineEmits(["change"])
   font-size: 0.85rem;
   margin-bottom: 0.15rem;
 }
-select {
+.rp-dropdown {
   width: 100%;
-  padding: 0.2rem 0.3rem;
-  color: var(--bng-off-white);
-  background: rgba(var(--bng-cool-gray-800-rgb), 0.95);
-  border: 1px solid rgba(var(--bng-cool-gray-500-rgb), 0.8);
-  border-radius: var(--bng-corners-1);
 }
 </style>

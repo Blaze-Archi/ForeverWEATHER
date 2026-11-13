@@ -48,7 +48,7 @@
         Stochastic glossy reflections (experimental, needs TAA / DLSS / FSR)
       </BngSwitch>
       <RpSelect label="Reflection engine" :value="state.s.reflectionMode" :options="REFLECTION_MODES"
-        hint="Auto uses BeamNG's own PBR + SSR for the wet ground when the material change works, otherwise the mod's own trace. Puddles always use the mod's trace."
+        hint="Auto: the mod draws the wet road itself (no hitches, dry in tunnels). Native: BeamNG's own PBR + SSR on the road materials; they are rewritten a few per frame whenever the wetness changes (that costs frame time), and tunnel roads shine too. Puddles always use the mod's trace."
         @change="rp.set('reflectionMode', $event)" />
       <template v-if="rp.nativeActive()">
         <div class="rp-minor">Native (BeamNG PBR + SSR)</div>
@@ -69,7 +69,7 @@
         <div class="rp-muted">The native reflection follows "Roughness when wet", "Reflection strength" and "Puddle-like at max rain".</div>
       </template>
       <template v-if="rp.ownActive()">
-        <div class="rp-minor">Own trace{{ state.s.reflectionMode === 0 ? " (used while the native path is not active)" : "" }}</div>
+        <div class="rp-minor">Own trace</div>
         <RpSlider v-for="x in SLIDERS.groundRefl" :key="x.k" v-bind="sliderProps(x)" @change="rp.set(x.k, $event)" />
         <RpSelect label="When the reflection misses" :value="state.s.roadFallback" :options="FALLBACK_MODES"
           hint="What the film shows where the screen-space trace finds nothing on screen (e.g. sky above the top edge)."
@@ -173,6 +173,25 @@
       <div class="rp-muted">Tyres: {{ state.diag.wheels || 0 }} tracked. Spray follows the tread speed, so wheelspin throws water too.</div>
     </RpSection>
 
+    <RpSection title="Hydroplaning" :open="state.open.hydro" @toggle="rp.toggle('hydro')">
+      <RpSelect label="Hydroplaning" :value="state.s.hydroplaning" :options="HYDRO_MODES"
+        hint="Arcade: only deep puddles at speed, the water never carries more than 45 % of a tyre's load. Simcade: up to 65 %, a car still reacts to deep puddles at speed. Sim: up to 95 % (full aquaplaning at about 95 km/h in a deep puddle on a 2.2 bar road tyre)."
+        @change="rp.set('hydroplaning', $event)" />
+      <RpSlider v-for="x in SLIDERS.hydro" :key="x.k" v-bind="sliderProps(x)" @change="rp.set(x.k, $event)" />
+      <BngSwitch :model-value="!!state.s.hydroTraffic" @update:model-value="rp.set('hydroTraffic', $event)">
+        Other cars too (within 400 m)
+      </BngSwitch>
+      <BngSwitch :model-value="!!state.s.hydroDebug" @update:model-value="rp.set('hydroDebug', $event)">
+        Show the contact patches (debug: blue = water, red = load on the water)
+      </BngSwitch>
+      <div class="rp-note rp-muted">{{ rp.hydroText() }}</div>
+      <div class="rp-muted">Node by node: the tread nodes touching the road find the water under them (the road film and
+        exactly the puddles you see, never under a roof), the tread drains what it can, and the water pressure in front of
+        the tyre lifts each node off the road against the tyre's own pressure, so the game's tyre physics loses the grip
+        there. The water the tyre pushes aside drags it back, so one wheel in a puddle pulls the car. Only on hard
+        ground (asphalt, concrete, cobbles).</div>
+    </RpSection>
+
     <RpSection title="Diagnostics" :open="state.open.debug" @toggle="rp.toggle('debug')">
       <RpSelect label="Debug view" :value="state.s.debugMode" :options="DEBUG_VIEWS" @change="rp.set('debugMode', $event)" />
       <BngSwitch :model-value="!!state.s.vehicleMask" @update:model-value="rp.set('vehicleMask', $event)">
@@ -199,7 +218,7 @@ import RpSection from "../components/RpSection.vue"
 import RpSlider from "../components/RpSlider.vue"
 import RpSelect from "../components/RpSelect.vue"
 import { useRainPuddles } from "../shared/useRainPuddles.js"
-import { TOGGLES, REFLECTION_MODES, SSR_QUALITIES, FALLBACK_MODES, DEBUG_VIEWS, SLIDERS, PRESETS } from "../shared/controls.js"
+import { TOGGLES, REFLECTION_MODES, HYDRO_MODES, SSR_QUALITIES, FALLBACK_MODES, DEBUG_VIEWS, SLIDERS, PRESETS } from "../shared/controls.js"
 import { VERSION } from "../shared/constants.js"
 
 const rp = useRainPuddles()
