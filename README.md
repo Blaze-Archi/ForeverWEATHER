@@ -8,6 +8,7 @@ A graphics and physics mod for **BeamNG.drive 0.40.x** (version 1.0.0 **Alpha**)
 shaders and Lua; it needs no other mod.
 
 > **DX12 and Vulkan only.** DX11 doesn't support SSR on BeamNG.drive currently, and the mod utilizes SSR for the puddles.
+> 
 > **Alpha release.** Expect rough edges; please report problems as issues.
 >
 > **Made with AI.** This mod was written by an AI assistant, Claude (by Anthropic) working in Claude Code: all of its
