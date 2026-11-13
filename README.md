@@ -4,9 +4,11 @@
 
 Falling rain, wet roads, puddles with reflections, node-based hydroplaning, body droplets, rain on the windshield, rear and side windows with real wipers, dry tunnels, and tyre spray.
 
-A graphics and physics mod for **BeamNG.drive 0.40.x** (version 1.0.0). Everything is drawn by the mod's own compute
+A graphics and physics mod for **BeamNG.drive 0.40.x** (version 1.0.0 **Alpha**). Everything is drawn by the mod's own compute
 shaders and Lua; it needs no other mod.
 
+> **Alpha release.** Expect rough edges; please report problems as issues.
+>
 > **Made with AI.** This mod was written by an AI assistant, Claude (by Anthropic) working in Claude Code: all of its
 > code, shaders, settings panel and texts, including this page. Blaze-Archi directed the work, tested it in game and
 > chose what stays. See [About the AI](#about-the-ai) below.
