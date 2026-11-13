@@ -1,0 +1,5 @@
+export const VERSION = "1.0.0"
+export const MOD_ROOT = "/ui/ui-vue/mods/RainPuddles"
+export const ROUTE_NAME = "menu.rainPuddles"
+export const ROUTE_SOURCE_ID = "RainPuddles.routes"
+export const PAUSE_BUTTON_ID = "rain-puddles-card"
