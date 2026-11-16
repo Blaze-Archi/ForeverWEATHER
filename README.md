@@ -4,7 +4,7 @@
 
 Falling rain, wet roads, puddles with reflections, node-based hydroplaning, body droplets, rain on the windshield, rear and side windows with real wipers, lens drops, dry tunnels, tyre spray, and a night street-racer look.
 
-A graphics and physics mod for **BeamNG.drive 0.40.x** (version 1.2.0 **Alpha**). Everything is drawn by the mod's own compute
+A graphics and physics mod for **BeamNG.drive 0.40.x** (version 1.2.1 **Alpha**). Everything is drawn by the mod's own compute
 shaders and Lua; it needs no other mod.
 
 > **DX12 and Vulkan only.** DX11 doesn't support SSR on BeamNG.drive currently, and the mod utilizes SSR for the puddles.
@@ -20,7 +20,7 @@ shaders and Lua; it needs no other mod.
 ## What it does
 
 - Wet asphalt that darkens and turns glossy with the rain, plus puddles on roads with screen-space reflections, rain ripples and tyre wakes. Water only stands on level ground: no puddles on hills.
-- Droplets on every nearby car: round beads, teardrops and elongated running drops that bead, run off with gravity and stream backward with the airflow. Each one is a small lens: clear water that shows an upside-down view of what is around it.
+- Droplets on every nearby car: round beads, teardrops and elongated running drops that bead, run off with gravity and stream backward with the airflow. Each one is a small lens: clear water that shows an upside-down view of what is around it, and its rim catches bright light (the sky over a dark car, lit streets and lamps at night), so the drops show in the dark too.
 - Rain on your car's windshield, rear / hatch glass and side windows, from the driver's seat and from outside, cleared by automatic rain-sensing wipers.
 - Drops on the camera lens all over the screen, blown toward the edges as you drive.
 - Node-based hydroplaning (Arcade / Simcade / Sim): the water under each tyre's contact-patch nodes (the road film and exactly the puddles you see) lifts them off the road against the tyre's own pressure and drags them back, so grip fades in deep water at speed and one wheel in a puddle pulls the car.
@@ -100,6 +100,15 @@ copy of it in `mods/unpacked/foreverweather/` also works for development. After 
 (`shaders/common/postFx/rainPuddlesNN`) and `shaderDir` in `lua/ge/extensions/rainPuddles.lua`, or the game keeps the
 compiled old one.
 
+## What's new in 1.2.1
+
+- **Light catch** (Vehicle droplets, default 1.5). With 1.2.0's low Fresnel the beads were clear water but nearly
+  vanished on dark paint and at night. Now, where a bead's rim mirrors something far brighter than the paint around it
+  (the sky over a dark car, lit streets and street lamps at night), the rim mirrors more, up to 1.5 times the water's
+  own Fresnel. Beads on mid and light paint by day stay clear lenses. It only brightens the rims, never tints them.
+
+Full notes: [docs/history/CHANGES_v1.2.1.md](docs/history/CHANGES_v1.2.1.md).
+
 ## What's new in 1.2.0
 
 - **Renamed:** the zip is `ForeverWEATHER.zip` now, and the game's mod manager shows the mod's icon and description.
@@ -163,7 +172,7 @@ the ground gets wet and dries, the puddles and the spray. On every other map it 
 | `lua/ge/extensions/rainPuddlesEarth.lua` | bridge to BeamNG.Earth's real weather (only active on that map) |
 | `lua/vehicle/extensions/rainPuddlesHydroVeh.lua` | hydroplaning, vehicle side: contact-patch nodes, water depth, lift and drag at the physics rate |
 | `lua/vehicle/extensions/` (other files) | wheel / windshield probe, the optional Animated Wipers bridge |
-| `shaders/common/postFx/rainPuddles31/` | compute shaders: puddles + wet ground, body droplets, glass, falling rain, spray, lens, Midnight grade |
+| `shaders/common/postFx/rainPuddles37/` | compute shaders: puddles + wet ground, body droplets, glass, falling rain, spray, lens, Midnight grade |
 | `ui/ui-vue/mods/RainPuddles/` | settings panel (Pause menu > Mods > ForeverWEATHER) |
 | `art/rainPuddles/` | puddle masks (and their raw fields for the physics), droplet atlas, wiper sweep texture |
 | `mod_info/FOREVERWEATHER/` | icon and description for the game's mod manager |
