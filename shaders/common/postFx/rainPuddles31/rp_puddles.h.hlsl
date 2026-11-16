@@ -93,6 +93,22 @@ cbuffer perDraw : register(b0)
     uniform float4 rpRoadA45; uniform float4 rpRoadB45;
     uniform float4 rpRoadA46; uniform float4 rpRoadB46;
     uniform float4 rpRoadA47; uniform float4 rpRoadB47;
+    uniform float4 rpRoadA48; uniform float4 rpRoadB48;
+    uniform float4 rpRoadA49; uniform float4 rpRoadB49;
+    uniform float4 rpRoadA50; uniform float4 rpRoadB50;
+    uniform float4 rpRoadA51; uniform float4 rpRoadB51;
+    uniform float4 rpRoadA52; uniform float4 rpRoadB52;
+    uniform float4 rpRoadA53; uniform float4 rpRoadB53;
+    uniform float4 rpRoadA54; uniform float4 rpRoadB54;
+    uniform float4 rpRoadA55; uniform float4 rpRoadB55;
+    uniform float4 rpRoadA56; uniform float4 rpRoadB56;
+    uniform float4 rpRoadA57; uniform float4 rpRoadB57;
+    uniform float4 rpRoadA58; uniform float4 rpRoadB58;
+    uniform float4 rpRoadA59; uniform float4 rpRoadB59;
+    uniform float4 rpRoadA60; uniform float4 rpRoadB60;
+    uniform float4 rpRoadA61; uniform float4 rpRoadB61;
+    uniform float4 rpRoadA62; uniform float4 rpRoadB62;
+    uniform float4 rpRoadA63; uniform float4 rpRoadB63;
     uniform float4 rpVehG0; uniform float4 rpVehG1; uniform float4 rpVehG2;
     uniform float4 rpVehG3; uniform float4 rpVehG4; uniform float4 rpVehG5; // w = ground height under the vehicle
     uniform float4 rpVehG6; uniform float4 rpVehG7; uniform float4 rpVehG8;
@@ -111,6 +127,35 @@ cbuffer perDraw : register(b0)
     uniform float4 rpVehA9; uniform float4 rpVehB9; uniform float4 rpVehC9; uniform float4 rpVehD9;
     uniform float4 rpVehA10; uniform float4 rpVehB10; uniform float4 rpVehC10; uniform float4 rpVehD10;
     uniform float4 rpVehA11; uniform float4 rpVehB11; uniform float4 rpVehC11; uniform float4 rpVehD11;
+
+    // 1.0.2: wet highlights of the level's lights (1.1.1: 24 near the camera, ahead of it; Lua):
+    //   A xyz position, w range (m);  B rgb colour x brightness, w cos(inner half angle) of a spot (2 = point light,
+    //   0 = slot unused);  C xyz spot axis, w cos(outer half angle)
+    uniform float4 rpLightA0; uniform float4 rpLightB0; uniform float4 rpLightC0;
+    uniform float4 rpLightA1; uniform float4 rpLightB1; uniform float4 rpLightC1;
+    uniform float4 rpLightA2; uniform float4 rpLightB2; uniform float4 rpLightC2;
+    uniform float4 rpLightA3; uniform float4 rpLightB3; uniform float4 rpLightC3;
+    uniform float4 rpLightA4; uniform float4 rpLightB4; uniform float4 rpLightC4;
+    uniform float4 rpLightA5; uniform float4 rpLightB5; uniform float4 rpLightC5;
+    uniform float4 rpLightA6; uniform float4 rpLightB6; uniform float4 rpLightC6;
+    uniform float4 rpLightA7; uniform float4 rpLightB7; uniform float4 rpLightC7;
+    uniform float4 rpLightA8; uniform float4 rpLightB8; uniform float4 rpLightC8;
+    uniform float4 rpLightA9; uniform float4 rpLightB9; uniform float4 rpLightC9;
+    uniform float4 rpLightA10; uniform float4 rpLightB10; uniform float4 rpLightC10;
+    uniform float4 rpLightA11; uniform float4 rpLightB11; uniform float4 rpLightC11;
+    uniform float4 rpLightA12; uniform float4 rpLightB12; uniform float4 rpLightC12;
+    uniform float4 rpLightA13; uniform float4 rpLightB13; uniform float4 rpLightC13;
+    uniform float4 rpLightA14; uniform float4 rpLightB14; uniform float4 rpLightC14;
+    uniform float4 rpLightA15; uniform float4 rpLightB15; uniform float4 rpLightC15;
+    uniform float4 rpLightA16; uniform float4 rpLightB16; uniform float4 rpLightC16;
+    uniform float4 rpLightA17; uniform float4 rpLightB17; uniform float4 rpLightC17;
+    uniform float4 rpLightA18; uniform float4 rpLightB18; uniform float4 rpLightC18;
+    uniform float4 rpLightA19; uniform float4 rpLightB19; uniform float4 rpLightC19;
+    uniform float4 rpLightA20; uniform float4 rpLightB20; uniform float4 rpLightC20;
+    uniform float4 rpLightA21; uniform float4 rpLightB21; uniform float4 rpLightC21;
+    uniform float4 rpLightA22; uniform float4 rpLightB22; uniform float4 rpLightC22;
+    uniform float4 rpLightA23; uniform float4 rpLightB23; uniform float4 rpLightC23;
+    uniform float4 rpLightK;   // x gain, y lights in use, z least roughness of a highlight, w night factor (1 at night, 0 by day)
 
 #include "rp_shelter_cb.h.hlsl"
 

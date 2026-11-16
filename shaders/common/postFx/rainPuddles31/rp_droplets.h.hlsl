@@ -18,7 +18,8 @@ cbuffer perDraw : register(b0)
     uniform float4 rpDropA;    // x density, y radius (m), z refraction, w life speed (already folded into rpVehH.x)
     uniform float4 rpDropB;    // x shell thickness, y sheen, z max distance, w rain
     uniform float4 rpDropC;    // x gravity slide, y aero, z wind influence, w inertia strength
-    uniform float4 rpDropD;    // x run-off amount, y trail amount, zw unused
+    uniform float4 rpDropD;    // x run-off amount, y trail amount, z Fresnel of the beads (1.1), w unused (1.2)
+    // (1.2: the street lamps of 1.1 / 1.1.1 - rpDropE, rpLightA..C, rpLightK - are no longer used by the beads)
 
     uniform float4 rpVehA0; uniform float4 rpVehB0; uniform float4 rpVehC0; uniform float4 rpVehD0;
     uniform float4 rpVehA1; uniform float4 rpVehB1; uniform float4 rpVehC1; uniform float4 rpVehD1;

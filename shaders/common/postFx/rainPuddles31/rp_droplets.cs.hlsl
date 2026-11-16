@@ -29,7 +29,7 @@ float3 rpDropLoad(int2 q)
 // Tile 15 of the atlas is a flat calibration colour. Anything else (missing texture, sRGB decode) => analytic shapes.
 bool rpAtlasValid()
 {
-    float4 m = dropTexTex.SampleLevel(dropTex_sampler_, float2(0.875, 0.875), 0.0);
+    float4 m = dropTexTex.SampleLevel(dropTex_sampler_, RP_ATLAS_CAL_UV, 0.0);
     float4 d = abs(m - float4(0.251, 0.749, 0.502, 1.0));
     return max(max(d.x, d.y), max(d.z, d.w)) < 0.06;
 }
@@ -41,8 +41,7 @@ float4 rpDropShape(float2 q, float tile, float lod, bool atlas)
     float inside = step(max(abs(q.x), abs(q.y)), 0.999);
     if (atlas)
     {
-        float2 t = float2(fmod(tile, 4.0), floor(tile * 0.25));
-        float2 uv = (t + 0.0625 + (q * 0.5 + 0.5) * RP_TILE_IN) * 0.25;
+        float2 uv = rpAtlasUV(q, tile);   // 1.2: 4 x 8 atlas (rp_lib.h.hlsl)
         float4 a = dropTexTex.SampleLevel(dropTex_sampler_, uv, lod);
         s = float4(a.xy * 2.0 - 1.0, a.z, a.w);
     }
@@ -67,7 +66,7 @@ float3 rpVisibleSky(int2 p, float3 ray0, float3 dxr, float3 dyr, out float conf,
     for (int i = 0; i < 8; i++)
     {
         int2 q = rpClampPix(int2(dispatchRect.xy + float2((float(i) + 0.5) / 8.0, 0.05) * dispatchRect.zw));
-        if (rpDepthLoad(q) >= 0.99999)
+        if (rpIsSkyDepth(rpDepthLoad(q)))
         {
             float3 c = rpDropLoad(q);
             float L = rpLuma(c);
@@ -135,6 +134,17 @@ float rpProfileAt(float4 a, float4 b, float4 c, float4 d, float u)
     int i1 = min(i0 + 1, 15);
     return lerp(rpProfileGet(a, b, c, d, i0), rpProfileGet(a, b, c, d, i1), s - float(i0));
 }
+
+// 1.1: the frame seen through a bead, bilinear (colour buffer through the atlas' linear clamp sampler)
+float3 rpDropTap(float2 pos, float2 invSize)
+{
+    float2 lo = dispatchRect.xy + 1.0;
+    float2 hi = dispatchRect.xy + dispatchRect.zw - 2.0;
+    return colorTex.SampleLevel(dropTex_sampler_, (clamp(pos, lo, hi) + 0.5) * invSize, 0).rgb;
+}
+
+// (1.1 and 1.1.1 mirrored the street lamps in the beads here, and lit their rims with the frame's average light at night.
+// 1.2 took both out: the lamps coloured the beads far too strongly.)
 
 PFX_NUMTHREADS
 void main(uint3 dispatchThreadID : SV_DispatchThreadID)
@@ -531,7 +541,36 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
                             float tw = step(along, 0.0) * step(-along, tl) * (1.0 - smoothstep(0.6, 1.0, abs(across) / (rawRad * 0.45))) * (1.0 - tpar);
                             trail = max(trail, tw * a);
 
-                            if (stretchD > 1.35)
+                            // 1.2: a share of the moving drops are elongated teardrops (a line with a small round head),
+                            // most of them at speed; the rest keep the teardrop
+                            bool elong = (stretchD > 1.35) && (frac(r5 * 7.31) < 0.20 + 0.65 * smoothstep(1.5, 3.0, stretchD));
+                            if (elong)
+                            {
+                                // elongated tile (16-19): a slim line swelling into a round head (radius 0.18 at q.y = +0.70),
+                                // the tip near q.y = -0.95. The head is 0.7 x the drop radius; the tile is stretched by
+                                // stretchD / 2.7, which keeps head and tail inside the search window above (tail 2.38 x
+                                // radius x stretch, head 0.26 x radius x stretch ahead)
+                                float Se = stretchD / 2.7;
+                                float s = 0.7 * radV / 0.18;
+                                float2 q = float2(across / s, along / (s * Se) + 0.70);
+                                float2 hq = float2(q.x, q.y - 0.70) / 0.18;
+                                float tT = saturate((q.y + 0.95) / 1.65);
+                                float wT = 0.012 + 0.168 * tT * sqrt(tT);
+                                float inTail = step(-0.95, q.y) * step(q.y, 0.70) * step(abs(q.x), wT);
+                                float score = max(1.0 - dot(hq, hq), 0.25 * inTail) * a;
+                                if (max(abs(q.x), abs(q.y)) < 1.0 && score > bestScore)
+                                {
+                                    bestScore = score;
+                                    bestQ = q;
+                                    bestAx = mside;
+                                    bestAy = mdir;
+                                    bestScale = s;
+                                    bestA = a;
+                                    bestStretch = Se;
+                                    bestTile = 16.0 + floor(r5 * 3.999);
+                                }
+                            }
+                            else if (stretchD > 1.35)
                             {
                                 // teardrop tile: head (radius 0.56 at q.y = +0.38) toward the motion, tail behind
                                 float s = radV / 0.56;
@@ -605,15 +644,15 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     float3 envN = rpEnvRefl(reflect(-V, N), p, prk, pra, prb, skyFill, skyConf);
     float fresN = rpFresnel(0.04, saturate(dot(N, V)));
     float sheen = saturate(rpDropB.y) * rain;
-    col *= 1.0 - 0.10 * sheen;
-    col += envN * (fresN * 0.22 * sheen);
+    col *= 1.0 - 0.12 * sheen;
+    col += envN * (fresN * 0.12 * sheen);
 
     float trailW = saturate(trail * saturate(rpDropD.y)) * distFade;
     col = lerp(col, col * 0.84 + envN * (0.08 + 0.5 * fresN), trailW * 0.65);
 
     float mistW = mist * distFade;
-    col *= 1.0 - 0.18 * mistW * smoothstep(0.3, 1.0, mistRR);
-    col += envN * (0.25 * mistW * pow(saturate(1.0 - mistRR), 4.0));
+    col *= 1.0 - 0.22 * mistW * (1.0 - smoothstep(0.6, 1.0, mistRR));
+    col += envN * (0.07 * mistW * pow(saturate(1.0 - mistRR), 8.0));
 
     col *= 1.0 - 0.12 * nearRing * distFade;
 
@@ -631,35 +670,56 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
             float3 nd = normalize(N * max(nz, 0.05) + tang);
             float thick = saturate(sh.z);
             float ndv = saturate(dot(nd, V));
-            float fres = rpFresnel(0.02, ndv);
+            // 1.1 Fresnel of the water surface (Schlick, F0 0.02), scaled by 'Fresnel': the bead is clear where it faces
+            // the camera and turns into a mirror toward its rim
+            float fres = saturate(rpFresnel(0.02, ndv) * max(rpDropD.z, 0.0));
 
-            // Refraction: the slope of the drop, projected to the screen, displaces what is seen through it.
+            // 1.1 refraction. A bead is a strong little lens: what is seen through it comes from several bead radii
+            // away and upside down (a small, inverted image of what lies around it), most of all toward its rim. The
+            // slope of the drop projected to the screen gives the direction; read bilinear, with a little dispersion.
+            // (1.0 moved the image by about one bead radius: the bead mostly showed the paint under it, a 'bubble'.)
             float2 o0 = float2(0.0, 0.0);
             float2 o1 = float2(0.0, 0.0);
             bool okA = rpProjectFast(prk, pra, prb, off, o0);
-            bool okB = rpProjectFast(prk, pra, prb, off + tang * bestScale, o1);
-            float2 rOff = (okA && okB) ? -(o1 - o0) * rpDropA.z * (0.6 + 0.6 * thick) : float2(0.0, 0.0);
-            rOff = clamp(rOff, float2(-64.0, -64.0), float2(64.0, 64.0));
+            // 1.2: an elongated teardrop's tile is far larger than its head: its lens works at the head's size, as a teardrop's
+            float lensScale = (bestTile > 15.5) ? bestScale * (0.18 / 0.56) : bestScale;
+            bool okB = rpProjectFast(prk, pra, prb, off + tang * lensScale, o1);
+            float lensK = rpDropA.z * (2.0 + 2.6 * thick);
+            float2 rOff = (okA && okB) ? -(o1 - o0) * lensK : float2(0.0, 0.0);
+            float rMax = 96.0 * max(dispatchRect.w / 1080.0, 0.5);
+            rOff = clamp(rOff, float2(-rMax, -rMax), float2(rMax, rMax));
+            uint tw, th;
+            colorTex.GetDimensions(tw, th);
+            float2 invSize = 1.0 / float2(max(tw, 1u), max(th, 1u));
+            float2 pp = float2(p);
             float3 refr = float3(0.0, 0.0, 0.0);
-            refr.r = rpDropLoad(p + int2(round(rOff * 1.06))).r;
-            refr.g = rpDropLoad(p + int2(round(rOff))).g;
-            refr.b = rpDropLoad(p + int2(round(rOff * 0.92))).b;
+            refr.r = rpDropTap(pp + rOff * 1.05, invSize).r;
+            refr.g = rpDropTap(pp + rOff, invSize).g;
+            refr.b = rpDropTap(pp + rOff * 0.95, invSize).b;
 
+            // what the bead's surface mirrors (1.2: the plain reflection again: no night glow of the city in the rims)
             float3 env = rpEnvRefl(reflect(-V, nd), p, prk, pra, prb, skyFill, skyConf);
-            float darkRim = 1.0 - smoothstep(0.0, 0.45, thick);       // total internal reflection at the thin edge
+            float darkRim = 1.0 - smoothstep(0.0, 0.25, thick);       // total internal reflection at the thin edge
             // caustic: light from the sky focuses on the down-slope side of the drop
             float2 up2 = float2(Uw.z, Vw.z);
             float2 upT = float2(dot(up2, bestAx), dot(up2, bestAy));
-            float caustic = saturate(-dot(bestQ, upT / max(length(upT), 1e-3))) * saturate(thick * 1.5) * 0.30;
+            float caustic = pow(saturate(-dot(bestQ, upT / max(length(upT), 1e-3))), 2.0) * saturate(thick * 1.5) * 0.40;
             // glint: the brightest visible sky (sun side) mirrored in the curved surface of the drop
             float3 Hk = normalize(keyDir + V);
-            float glint = pow(saturate(dot(nd, Hk)), 180.0) * skyConf;
+            float glint = pow(saturate(dot(nd, Hk)), 420.0) * skyConf;
 
-            float3 dcol = refr * lerp(float3(0.93, 0.95, 0.97), float3(0.86, 0.93, 1.0), smoothGlass * 0.4);
-            dcol *= 1.0 - 0.60 * darkRim;
+            // what is seen through the bead: clear water (a faint blue-green), darker only in a thin rim
+            float3 dcol = refr * lerp(float3(0.97, 0.985, 0.99), float3(0.92, 0.96, 1.0), smoothGlass * 0.4);
+            dcol *= 1.0 - 0.35 * darkRim;
             dcol += refr * caustic;
-            dcol += env * ((0.05 + 0.95 * fres) * (0.55 + 0.45 * saturate(rpDropB.y)));
-            dcol += keyCol * (glint * 2.5);
+            // the paint's own sky reflection does not show through the water...
+            float fresFlat = rpFresnel(0.04, saturate(dot(N, V)));
+            dcol = max(dcol - envN * (fresFlat * 0.4), 0.0);
+            // ...the bead's curved surface reflects instead (Fresnel: clear in the middle, a mirror at the rim)
+            dcol = dcol * (1.0 - fres) + env * (fres * (0.95 + 0.3 * saturate(rpDropB.y)));
+            // a soft sky highlight on the side of the bead that faces the brightest sky, then the sharp glint
+            float soft = pow(saturate(dot(nd, Hk)), 40.0) * skyConf * saturate(thick * 2.0);
+            dcol += keyCol * (glint * 5.0 + soft * 0.35);
             col = lerp(col, dcol, cover);
         }
     }

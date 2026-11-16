@@ -37,21 +37,20 @@ float3 rpWindBlur(int2 q, int r)
 
 bool rpAtlasValid()
 {
-    float4 m = dropTexTex.SampleLevel(dropTex_sampler_, float2(0.875, 0.875), 0.0);
+    float4 m = dropTexTex.SampleLevel(dropTex_sampler_, RP_ATLAS_CAL_UV, 0.0);
     float4 d = abs(m - float4(0.251, 0.749, 0.502, 1.0));
     return max(max(d.x, d.y), max(d.z, d.w)) < 0.06;
 }
 
 // Droplet shape at q (tile space, |q| <= 1) from the shared droplet atlas: normal xy, thickness, coverage.
-// Tiles 0-7 round beads, 8-11 teardrops (head toward +y), 12-14 flat merged drops.
+// Tiles 0-7 round beads, 8-11 teardrops (head toward +y), 12-14 flat merged drops (1.2: 4 x 8 atlas, rp_lib.h.hlsl).
 float4 rpWindShape(float2 q, float tile, float lod, bool atlas)
 {
     float4 s = float4(0.0, 0.0, 0.0, 0.0);
     float inside = step(max(abs(q.x), abs(q.y)), 0.999);
     if (atlas)
     {
-        float2 t = float2(fmod(tile, 4.0), floor(tile * 0.25));
-        float2 uv = (t + 0.0625 + (q * 0.5 + 0.5) * RP_TILE_IN) * 0.25;
+        float2 uv = rpAtlasUV(q, tile);
         float4 a = dropTexTex.SampleLevel(dropTex_sampler_, uv, lod);
         s = float4(a.xy * 2.0 - 1.0, a.z, a.w);
     }
@@ -714,7 +713,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
             float rim = 1.0 - smoothstep(0.0, 0.5, thick);
             float3 nd = normalize(rpWindB.xyz * max(sqrt(saturate(1.0 - dot(nn, nn))), 0.05) + tang);
             float3 V = normalize(ro - Pw);
-            float F = rpFresnel(0.02, saturate(dot(nd, V)));
+            // 1.2 'Fresnel' of the glass drops (rpWindF.y, 1 = the look so far): how much of a mirror their rim becomes
+            float F = saturate(rpFresnel(0.02, saturate(dot(nd, V))) * max(rpWindF.y, 0.0));
             float3 skyRefl = rpSkyColor(reflect(-V, nd)) * 0.318;
             float hl = pow(saturate(dot(nn, float2(-0.35, 0.85)) * 1.1), 8.0) * thick;
             float3 dcol = through * (1.0 - 0.60 * rim);

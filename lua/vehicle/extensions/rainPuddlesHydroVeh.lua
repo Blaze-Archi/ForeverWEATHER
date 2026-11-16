@@ -157,7 +157,9 @@ local function waterDepth(w, we, x, y, z)
     local pud, dep = puddleAt(x, y)
     if pud > 0.001 then
       local road = (e.roadsOnly and we and we.segs) and roadMaskAt(we, x, y, z) or 1
-      h = h + e.hPuddle * pud * dep * road
+      -- 1.2: no standing water on sloping ground (GE measures the slope around each tyre, as the shader's slope gate)
+      local flat = we and tonumber(we.flat) or 1
+      h = h + e.hPuddle * pud * dep * road * flat
     end
   end
   return h * open * w.clear

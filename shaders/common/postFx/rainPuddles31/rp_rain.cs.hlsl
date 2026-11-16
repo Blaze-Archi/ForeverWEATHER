@@ -200,6 +200,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     avgC /= 12.0;
     const float nightK = saturate(1.0 - 2.0 * rpLuma(skyC) / max(rpLuma(avgC), 1e-5));
     const float visN = rpRainA.x * (1.0 + 0.6 * nightK);
+    rpShelterInit();                                        // roofs (rpRoofZ in rpRainGrid)
     rpRainGrid(rpRainC.xyz, rd, rpRainC.w, 0.3, min(RP_NEAR_END, sceneT), 1e5, sceneT, pixAng, RP_NEAR_STEPS,
                rpRainB.xyz, dropR, rpRainA.y, visN, ex, ey, accA, accO);
     rpRainGrid(rpRainD.xyz, rd, rpRainD.w, RP_NEAR_END, min(maxD, sceneT), maxD, sceneT, pixAng, RP_FAR_STEPS,

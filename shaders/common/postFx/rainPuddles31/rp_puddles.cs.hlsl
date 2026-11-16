@@ -5,6 +5,26 @@
 
 #define RP_SSR_MAX_STEPS 48
 
+// 1.0.2 glossy wet-road reflection (defaults; test builds override them above)
+#ifndef RP_GLOSS_ENERGY
+#define RP_GLOSS_ENERGY 1      // 1: split-sum environment BRDF for the wet roughness, 0: the 1.0 Fresnel curve
+#endif
+#ifndef RP_GLOSS_GAIN
+#define RP_GLOSS_GAIN 1.0      // overall gain of the ground reflectance (1 = physical at 'Reflection strength' 0.5)
+#endif
+#ifndef RP_GLOSS_SCALE
+#define RP_GLOSS_SCALE 1.0     // glossy blur: 1 = the GGX lobe's half-maximum width, before the 'Reflection blur' slider
+#endif
+#ifndef RP_GLOSS_CAP_X
+#define RP_GLOSS_CAP_X 18.0    // largest horizontal blur radius (px at 1080p)
+#endif
+#ifndef RP_GLOSS_CAP_Y
+#define RP_GLOSS_CAP_Y 56.0    // largest vertical blur radius (px at 1080p)
+#endif
+#ifndef RP_GLOSS_JITTER
+#define RP_GLOSS_JITTER 1      // 1: static per-pixel phase of the gather rows (no frame noise, so no flicker)
+#endif
+
 float3 rpLoadColor(int2 q)
 {
     return colorTex.Load(int3(rpClampPix(q), 0)).rgb;
@@ -38,6 +58,116 @@ float3 rpStreakColor(int2 q, float lenPx)
     return c * 0.8 + (rpLoadColor(q + int2(2, 0)) + rpLoadColor(q - int2(2, 0))) * 0.1;
 }
 
+// ---- 1.0.2 glossy reflection ----------------------------------------------------------------------------------------
+// Karis' analytic fit of the split-sum environment BRDF: the share of the light a surface of perceptual roughness
+// 'rough' and reflectance f0 reflects toward the eye at view angle NoV, masking and shadowing of its microfacets
+// included. A smooth film (rough 0.05) mirrors 70-90 % at grazing views; wet asphalt (rough ~0.4) only about a quarter,
+// as a soft sheen, and next to nothing seen from above.
+float rpEnvBRDF(float f0, float rough, float NoV)
+{
+    const float4 c0 = float4(-1.0, -0.0275, -0.572, 0.022);
+    const float4 c1 = float4(1.0, 0.0425, 1.04, -0.04);
+    float4 r = saturate(rough) * c0 + c1;
+    float a004 = min(r.x * r.x, exp2(-9.28 * saturate(NoV))) * r.x + r.y;
+    float2 AB = float2(-1.04, 1.04) * a004 + r.zw;
+    return saturate(f0 * AB.x + AB.y);
+}
+
+// Bilinear read of the colour buffer at pixel position pos (integer = pixel centre), kept inside the dispatch rectangle.
+float3 rpTapColor(float2 pos, float2 invSize)
+{
+    float2 lo = dispatchRect.xy + 1.0;
+    float2 hi = dispatchRect.xy + dispatchRect.zw - 2.0;
+    return colorTex.SampleLevel(envTex_sampler_, (clamp(pos, lo, hi) + 0.5) * invSize, 0).rgb;
+}
+
+// Glossy gather: 3 columns x 7 rows of bilinear taps (each averages 2x2 texels) over an ellipse of radii rad (px; x
+// across, y along the screen vertical) around the reflected pixel q, Gaussian weights (sigma = rad / 2). jit (-0.5..0.5)
+// shifts the rows of this pixel by part of a row (a fixed pattern per pixel, never per frame: no flicker), so the rows of
+// neighbouring pixels interleave and a small light smears into a streak instead of a column of copies.
+float3 rpGlossColor(int2 q, float2 rad, float jit)
+{
+    if (max(rad.x, rad.y) < 0.75)
+    {
+        return rpLoadColor(q);
+    }
+    uint tw, th;
+    colorTex.GetDimensions(tw, th);
+    float2 invSize = 1.0 / float2(max(tw, 1u), max(th, 1u));
+    float2 c = float2(q);
+    float2 stp = max(rad, float2(0.5, 0.5)) / float2(1.5, 3.5);
+    float2 irad = 1.0 / max(rad, float2(0.5, 0.5));
+    float3 acc = float3(0.0, 0.0, 0.0);
+    float ws = 0.0;
+    [unroll]
+    for (int j = -3; j <= 3; j++)
+    {
+        [unroll]
+        for (int i = -1; i <= 1; i++)
+        {
+            float2 o = float2(float(i) + 0.35 * jit, float(j) + jit) * stp;
+            float2 u = o * irad;
+            float w = exp(-2.0 * dot(u, u));
+            acc += rpTapColor(c + o, invSize) * w;
+            ws += w;
+        }
+    }
+    return acc / max(ws, 1e-4);
+}
+
+// Screen radii (px) of the glossy lobe for a hit at hk = hit distance / (camera-to-surface + hit distance) (1 = the far
+// field): lobe.x = horizontal radius of the far field, lobe.y = how much grazing views stretch it along the screen
+// vertical. The light-streak length is the least vertical radius. Capped, so the gather never spreads into copies.
+float2 rpLobeRadius(float2 lobe, float hk, float streakPx)
+{
+    float s = dispatchRect.w / 1080.0;
+    float rx = min(lobe.x * saturate(hk), RP_GLOSS_CAP_X * s);
+    float ry = min(max(rx * lobe.y, streakPx), RP_GLOSS_CAP_Y * s);
+    return float2(rx, ry);
+}
+
+// 1.0.2: highlight of one light on the wet film: GGX of the film's roughness (A/B/C as in rp_puddles.h.hlsl). Under a
+// street lamp a wet road shows a long glowing streak toward the viewer; the screen-space trace cannot find it (the lamps
+// hang above the top of the screen) and the engine does not draw it (it shades the road as dry asphalt).
+void rpLightGlint(float3 P, float3 N, float3 eye, float rough, float4 A, float4 B, float4 C, inout float3 spec, inout float diff)
+{
+    float3 Lv = A.xyz - P;
+    float d2 = dot(Lv, Lv);
+    float r = max(A.w, 0.5);
+    if (B.w > 0.0 && d2 < r * r)
+    {
+        float d = sqrt(d2);
+        float3 L = Lv / max(d, 1e-3);
+        float NdotL = saturate(dot(N, L));
+        float NdotV = saturate(dot(N, eye));
+        if (NdotL > 0.0 && NdotV > 0.0)
+        {
+            // the engine's own falloff (clustered lighting): inverse square with a windowed cutoff at the range, and
+            // the spot cone's linear edge between its outer and inner angles
+            float t = d2 / (r * r);
+            float window = saturate(1.0 - t * t);
+            float att = window * window / max(d2, 1e-4);
+            float spot = 1.0;
+            if (B.w < 1.5)
+            {
+                spot = saturate((dot(-L, C.xyz) - C.w) / max(B.w - C.w, 1e-3));
+            }
+            float3 H = normalize(L + eye);
+            float NdotH = saturate(dot(N, H));
+            float a = rough * rough;
+            float a2 = a * a;
+            float dd = NdotH * NdotH * (a2 - 1.0) + 1.0;
+            float D = a2 / (3.14159265 * dd * dd);
+            float k = a * 0.5;
+            float G = (NdotL / (NdotL * (1.0 - k) + k)) * (NdotV / (NdotV * (1.0 - k) + k));
+            float F = rpFresnel(0.02, saturate(dot(H, eye)));
+            float w = att * spot;
+            spec += B.rgb * (w * D * G * F / (4.0 * NdotV));
+            diff += dot(B.rgb, float3(0.2126, 0.7152, 0.0722)) * w * NdotL;
+        }
+    }
+}
+
 float rpSceneMetres(int2 q)
 {
     float ndc = rpDepthLoad(rpClampPix(q));
@@ -63,8 +193,8 @@ float rpEdgeConf(int2 q)
 // exact reflection direction. At infinity the parallax between the receiver and the camera vanishes, so the
 // pixel that shows direction R IS the correct reflected radiance. A pixel that holds the far-plane clear value
 // (sky) or geometry beyond the march range is accepted; anything nearer was already handled by the march.
-bool rpSkyLookup(float3 R, int2 p, float3 prk, float3 pra, float3 prb, float maxDist, float depthK, int blurPx,
-                 float streakPx, out float3 reflected, out float confidence)
+bool rpSkyLookup(float3 R, int2 p, float3 prk, float3 pra, float3 prb, float maxDist, float depthK, float2 farRad,
+                 float jit, out float3 reflected, out float confidence)
 {
     reflected = float3(0.0, 0.0, 0.0);
     confidence = 0.0;
@@ -88,7 +218,7 @@ bool rpSkyLookup(float3 R, int2 p, float3 prk, float3 pra, float3 prb, float max
                 }
                 if (far)
                 {
-                    reflected = (streakPx > 1.5) ? rpStreakColor(q, streakPx) : ((blurPx > 0) ? rpBlurColor(q, blurPx) : rpLoadColor(q));
+                    reflected = rpGlossColor(q, farRad, jit);
                     confidence = saturate(rpEdgeConf(q));
                     found = (confidence > 0.001);
                 }
@@ -197,7 +327,7 @@ bool rpTraceReflection(
     float maxDist,
     float thickness,
     float rough,
-    float blurAmount,
+    float2 lobe,
     float depthK,
     float streakPx,
     out float3 reflected,
@@ -220,7 +350,14 @@ bool rpTraceReflection(
 
     int2 lo = int2(dispatchRect.xy) + 2;
     int2 hi = int2(dispatchRect.xy + dispatchRect.zw) - 3;
-    int blurPx = rpBlurRadius(rough, blurAmount);
+    // 1.0.2: the blur follows the roughness lobe and the distance between the surface and what it reflects
+    float camD = length(S - rpCam.xyz);
+#if RP_GLOSS_JITTER
+    float jit = frac(52.9829189 * frac(dot(float2(p), float2(0.06711056, 0.00583715)))) - 0.5;
+#else
+    float jit = 0.0;
+#endif
+    float2 farRad = rpLobeRadius(lobe, 1.0, streakPx);
 
     bool tryFar = (hi.x > lo.x) && (hi.y > lo.y);   // true while an escaped ray may still see the far field
 
@@ -261,7 +398,7 @@ bool rpTraceReflection(
             // beyond (sky above the top edge in most views); trusted more when it is sky.
             int2 qb = clamp(q, lo, hi);
             bool skyB = (rpDepthLoad(qb) >= 0.99999);
-            escCol = rpBlurColor(qb, max(blurPx, 4));
+            escCol = rpGlossColor(qb, max(farRad, float2(4.0, 4.0)), jit);
             escConf = skyB ? 0.9 : 0.45;
             tryFar = false;
             why = 5.0;
@@ -272,7 +409,7 @@ bool rpTraceReflection(
         if (ndc >= 0.99999)
         {
             // Crossed a sky pixel: that sky is what the reflection sees (unless the exact far lookup below does better).
-            escCol = rpBlurColor(q, max(blurPx, 2));
+            escCol = rpGlossColor(q, max(farRad, float2(2.0, 2.0)), jit);
             escConf = 0.9 * rpEdgeConf(q) + 0.1;
             why = 6.0;
             break;
@@ -318,7 +455,7 @@ bool rpTraceReflection(
                 }
             }
 
-            reflected = (streakPx > 1.5) ? rpStreakColor(bestQ, streakPx) : ((blurPx > 0) ? rpBlurColor(bestQ, blurPx) : rpLoadColor(bestQ));
+            reflected = rpGlossColor(bestQ, rpLobeRadius(lobe, hiT / max(camD + hiT, 1e-3), streakPx), jit);
             float distFade = 1.0 - smoothstep(maxDist * 0.72, maxDist, hiT);
             confidence = saturate(rpEdgeConf(bestQ) * distFade);
             result = (confidence > 0.001);
@@ -337,18 +474,53 @@ bool rpTraceReflection(
     {
         if (haveLast)
         {
-            escCol = rpBlurColor(lastQ, max(blurPx, 2));
+            escCol = rpGlossColor(lastQ, max(farRad, float2(2.0, 2.0)), jit);
             escConf = 0.55;
         }
     }
 
     if (tryFar)
     {
-        result = rpSkyLookup(R, p, prk, pra, prb, maxDist, depthK, blurPx, streakPx, reflected, confidence);
+        result = rpSkyLookup(R, p, prk, pra, prb, maxDist, depthK, farRad, jit, reflected, confidence);
         if (result) { why = 2.0; }
     }
     dbgInfo = float4(why, dbgRay, dbgScene, depthK);
     return result;
+}
+
+// 1.2: where the surface seen at pixel q is (offset from the camera, from its own depth), for the geometric slope below
+float3 rpSurfaceOff(int2 q, int2 p, float3 ray0, float3 dxr, float3 dyr, float3 camFwd)
+{
+    q = rpClampPix(q);
+    float d = realToEyeLinearDepth(ndcToRealDepth(rpDepthLoad(q), projParams.zw), projParams);
+    float3 ray = ray0 + dxr * float(q.x - p.x) + dyr * float(q.y - p.y);
+    return rpReconstruct(ray, camFwd, d, rpMode.y, rpMode.z);
+}
+
+// 1.2: slope (rise over run) of the ground at pixel p, from the depth of its neighbours a few pixels away: the geometry
+// itself, not the G-buffer normal (that one carries the road's bump map, so it is noisy and accepted up to ~24 degrees).
+// On each axis the side with the smaller depth step is used, so the edge of a kerb or a car on one side does not spoil it.
+float rpGroundSlope(int2 p, float3 ray0, float3 dxr, float3 dyr, float3 camFwd)
+{
+    uint dw = 1u, dh = 1u;
+    prepassDepthTexTex.GetDimensions(dw, dh);
+    // about 3 depth texels apart (with render scaling / upscaling the depth target is smaller than the frame)
+    int k = clamp(int(3.0 * dispatchRect.w / max(float(dh), 1.0) + 0.5), 3, 8);
+    const float3 off = rpSurfaceOff(p, p, ray0, dxr, dyr, camFwd);   // the centre read the same way as its neighbours
+    float3 tR = rpSurfaceOff(p + int2(k, 0), p, ray0, dxr, dyr, camFwd) - off;
+    float3 tL = off - rpSurfaceOff(p - int2(k, 0), p, ray0, dxr, dyr, camFwd);
+    float3 tD = rpSurfaceOff(p + int2(0, k), p, ray0, dxr, dyr, camFwd) - off;
+    float3 tU = off - rpSurfaceOff(p - int2(0, k), p, ray0, dxr, dyr, camFwd);
+    float3 tx = (abs(dot(tR, camFwd)) < abs(dot(tL, camFwd))) ? tR : tL;
+    float3 ty = (abs(dot(tD, camFwd)) < abs(dot(tU, camFwd))) ? tD : tU;
+    float3 n = cross(tx, ty);
+    float ln = length(n);
+    if (ln < 1e-9)
+    {
+        return 0.0;
+    }
+    n /= ln;
+    return length(n.xy) / max(abs(n.z), 1e-3);
 }
 
 PFX_NUMTHREADS
@@ -416,7 +588,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     float green = saturate((cpos.g - max(cpos.r, cpos.b)) / max(mx, 1e-4) * 3.0);
     float vegetationGate = 1.0 - saturate(green * rpPuddleB.w);
     // 1.0: under a roof, a bridge or in a tunnel no rain falls: the ground there stays dry (no film, no puddles, no
-    // reflections). Shelter grid from Lua (9 x 9 upward casts around the camera, rp_shelter.h.hlsl).
+    // reflections). Shelter grid from Lua (13 x 13 upward casts around the camera, rp_shelter.h.hlsl).
+    rpShelterInit();
     const float covered = rpGroundCovered(P);
     float surfBase = flatness * vegetationGate * (1.0 - covered);
     // 0.7: wet ground and puddles are independent layers with their own on/off switch and distance.
@@ -488,6 +661,16 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     const float surfP = surfBase * fadeP * (1.0 - onVehicle);   // where puddles may form
     const float surfR = surfBase * fadeR * (1.0 - onVehicle);   // where the ground gets wet
 
+    // 1.2: water only stands on level ground. Puddles (and the puddle look of a flooding road) fade out on slopes from 60 %
+    // of 'Steepest ground for puddles' (rpPuddleJ.y, rise over run) to it; the wet film itself stays.
+    float slopeT = 0.0;
+    float levelK = 1.0;
+    if (rpPuddleJ.y > 0.0 && (surfP > 0.002 || surfR > 0.002 || (dbgMode > 19.5 && dbgMode < 20.5)))
+    {
+        slopeT = rpGroundSlope(p, ray0, dxr, dyr, camFwd);
+        levelK = 1.0 - smoothstep(rpPuddleJ.y * 0.6, rpPuddleJ.y, slopeT);
+    }
+
     // ---- puddle mask + global asphalt film -------------------------------------------------------------------
     // Asphalt classifier: flat, low-chroma surfaces, excluding vegetation-like colors.
     float mn      = min(cpos.r, min(cpos.g, cpos.b));
@@ -509,11 +692,11 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
         else
         {
             roadMask = 0.0;
-            float4 rA[48] = { rpRoadA0, rpRoadA1, rpRoadA2, rpRoadA3, rpRoadA4, rpRoadA5, rpRoadA6, rpRoadA7, rpRoadA8, rpRoadA9, rpRoadA10, rpRoadA11, rpRoadA12, rpRoadA13, rpRoadA14, rpRoadA15, rpRoadA16, rpRoadA17, rpRoadA18, rpRoadA19, rpRoadA20, rpRoadA21, rpRoadA22, rpRoadA23, rpRoadA24, rpRoadA25, rpRoadA26, rpRoadA27, rpRoadA28, rpRoadA29, rpRoadA30, rpRoadA31, rpRoadA32, rpRoadA33, rpRoadA34, rpRoadA35, rpRoadA36, rpRoadA37, rpRoadA38, rpRoadA39, rpRoadA40, rpRoadA41, rpRoadA42, rpRoadA43, rpRoadA44, rpRoadA45, rpRoadA46, rpRoadA47 };
-            float4 rB[48] = { rpRoadB0, rpRoadB1, rpRoadB2, rpRoadB3, rpRoadB4, rpRoadB5, rpRoadB6, rpRoadB7, rpRoadB8, rpRoadB9, rpRoadB10, rpRoadB11, rpRoadB12, rpRoadB13, rpRoadB14, rpRoadB15, rpRoadB16, rpRoadB17, rpRoadB18, rpRoadB19, rpRoadB20, rpRoadB21, rpRoadB22, rpRoadB23, rpRoadB24, rpRoadB25, rpRoadB26, rpRoadB27, rpRoadB28, rpRoadB29, rpRoadB30, rpRoadB31, rpRoadB32, rpRoadB33, rpRoadB34, rpRoadB35, rpRoadB36, rpRoadB37, rpRoadB38, rpRoadB39, rpRoadB40, rpRoadB41, rpRoadB42, rpRoadB43, rpRoadB44, rpRoadB45, rpRoadB46, rpRoadB47 };
+            float4 rA[64] = { rpRoadA0, rpRoadA1, rpRoadA2, rpRoadA3, rpRoadA4, rpRoadA5, rpRoadA6, rpRoadA7, rpRoadA8, rpRoadA9, rpRoadA10, rpRoadA11, rpRoadA12, rpRoadA13, rpRoadA14, rpRoadA15, rpRoadA16, rpRoadA17, rpRoadA18, rpRoadA19, rpRoadA20, rpRoadA21, rpRoadA22, rpRoadA23, rpRoadA24, rpRoadA25, rpRoadA26, rpRoadA27, rpRoadA28, rpRoadA29, rpRoadA30, rpRoadA31, rpRoadA32, rpRoadA33, rpRoadA34, rpRoadA35, rpRoadA36, rpRoadA37, rpRoadA38, rpRoadA39, rpRoadA40, rpRoadA41, rpRoadA42, rpRoadA43, rpRoadA44, rpRoadA45, rpRoadA46, rpRoadA47, rpRoadA48, rpRoadA49, rpRoadA50, rpRoadA51, rpRoadA52, rpRoadA53, rpRoadA54, rpRoadA55, rpRoadA56, rpRoadA57, rpRoadA58, rpRoadA59, rpRoadA60, rpRoadA61, rpRoadA62, rpRoadA63 };
+            float4 rB[64] = { rpRoadB0, rpRoadB1, rpRoadB2, rpRoadB3, rpRoadB4, rpRoadB5, rpRoadB6, rpRoadB7, rpRoadB8, rpRoadB9, rpRoadB10, rpRoadB11, rpRoadB12, rpRoadB13, rpRoadB14, rpRoadB15, rpRoadB16, rpRoadB17, rpRoadB18, rpRoadB19, rpRoadB20, rpRoadB21, rpRoadB22, rpRoadB23, rpRoadB24, rpRoadB25, rpRoadB26, rpRoadB27, rpRoadB28, rpRoadB29, rpRoadB30, rpRoadB31, rpRoadB32, rpRoadB33, rpRoadB34, rpRoadB35, rpRoadB36, rpRoadB37, rpRoadB38, rpRoadB39, rpRoadB40, rpRoadB41, rpRoadB42, rpRoadB43, rpRoadB44, rpRoadB45, rpRoadB46, rpRoadB47, rpRoadB48, rpRoadB49, rpRoadB50, rpRoadB51, rpRoadB52, rpRoadB53, rpRoadB54, rpRoadB55, rpRoadB56, rpRoadB57, rpRoadB58, rpRoadB59, rpRoadB60, rpRoadB61, rpRoadB62, rpRoadB63 };
             int count = int(rpPuddleK.w + 0.5);
             [unroll]
-            for (int si = 0; si < 48; si++)
+            for (int si = 0; si < 64; si++)
             {
                 if (si < count)
                 {
@@ -528,7 +711,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
             }
         }
     }
-    const float surfPR = surfP * roadMask;   // where puddles may form
+    const float surfPR = surfP * roadMask * levelK;   // where puddles may form (1.2: only on level ground)
 
     float  shape = 0.5, puddle = 0.0, damp = 0.0, depthP = 0.0;
     float2 rip = float2(0, 0);
@@ -654,7 +837,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     float puddleW   = puddle * surfPR;
     float puddleWet = max(puddle, damp) * surfPR;                    // standing water + its damp rim
     float roadRefK  = saturate(rpPuddleE.x);                         // ground 'Reflection strength'
-    float flood     = saturate(rpPuddleK.x);
+    float flood     = saturate(rpPuddleK.x) * lerp(0.25, 1.0, levelK);   // 1.2: a sloping road does not flood like a level one
     float filmBase  = globalW * pow(rain, 0.6) * saturate(rpPuddleF.w);
     // Ground patchiness has its OWN pattern and scale (0.7): puddle coverage / size / pattern do not change it.
     float shapeR = 0.5;
@@ -718,12 +901,25 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     float puddleRefl = lerp(F, 0.97, rm * rm * rm * rm);
     // 1.0: wet asphalt reflects mostly toward grazing angles (water F0 = 0.02) with only a faint sheen straight down; the
     // old 4-16 % reflectance at every angle washed out the asphalt right in front of the car.
+#if RP_GLOSS_ENERGY
+    // 1.0.2: wet asphalt is a rough surface under a thin film. Its reflectance is the split-sum environment BRDF for the
+    // wet roughness: a faint sheen near the car, a bright but soft band toward the horizon that drops quickly as the
+    // roughness rises. (1.0 used the smooth-water Fresnel at every roughness, so a rough wet road still mirrored the
+    // scene at 70-80 % in the distance.) 'Reflection strength' 0.5 = the physical value, 1 = x1.6.
+    float roadRefl   = rpEnvBRDF(0.02, roadWet, NdotV) * (roadRefK * (2.4 - 0.8 * roadRefK)) * RP_GLOSS_GAIN;
+#else
     float roadRefl   = (lerp(0.012, 0.05, roadRefK) + lerp(0.85, 1.15, roadRefK) * F) * saturate(roadRefK * 4.0) * 0.92;
+#endif
     float groundRefl = lerp(roadRefl, puddleRefl, flood);
     // (The asphalt's own look comes through the per-pixel roughness from the G-buffer, i.e. the road's roughness map, and
     // the normal detail. A luminance-contrast trick tried here read the image that already holds the game's reflection
     // and turned its noise into speckles, so it is gone.)
+#if RP_GLOSS_ENERGY
+    // (the environment BRDF already holds the masking of the rough ground; the old factor stays for the puddles)
+    float reflW      = saturate(lerp(groundRefl * filmOwn, puddleRefl * (1.0 - 0.35 * puddleRough), puddleW));
+#else
     float reflW      = saturate(lerp(groundRefl * filmOwn, puddleRefl, puddleW) * (1.0 - 0.35 * puddleRough));
+#endif
 
     // Experimental stochastic glossy reflections (0.8, rpPuddleL.y): one GGX-sampled ray per pixel and frame instead of
     // a blur. This pass runs before BeamNG's temporal upscaler / AA, which averages the noise over frames (the same
@@ -795,8 +991,18 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
         float3 pra = float3(0.0, 0.0, 0.0);
         float3 prb = float3(0.0, 0.0, 0.0);
         rpMakeProj(ray0, dxr, dyr, prk, pra, prb);
+        // 1.0.2 glossy lobe: half-maximum width of the GGX reflection lobe for this roughness (out of the plane of
+        // incidence), in pixels of the far field; grazing views stretch it along the screen vertical (the light streaks
+        // of a wet road). 'Reflection blur' scales it (0 = sharp).
+        float aG = puddleRough * puddleRough;
+        float lobeTan = 1.286 * aG / max(1.0 - 0.413 * aG * aG, 0.2);
+        float focalPx = dot(ray0, camFwd) / max(length(dyr), 1e-9);
+        float stretch = 1.0 + (clamp(0.4 / max(NdotV, 0.02), 1.0, 5.0) - 1.0) * saturate(rpPuddleL.x * 1.5);
+        float2 lobe = float2(lobeTan * focalPx * blurT * RP_GLOSS_SCALE, stretch);
+        // 1.1.1: the reflected ray searches 250 m (was 90 m: far buildings and lamps dropped out of the reflections). The
+        // step count stays the same (the steps grow with the distance), so this costs nothing.
         if (rpTraceReflection(Sx, Rt, p, prk, pra, prb, camFwd, steps,
-                              min(layerDist, 90.0), thickK, puddleRough, blurT, depthK, streakPx,
+                              250.0, thickK, puddleRough, lobe, depthK, streakPx,
                               ssrCol, ssrConf, escCol, escConf, dbgInfo))
         {
             ssrW = saturate(ssrConf);
@@ -843,6 +1049,52 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     float ringK = saturate(length(rip) * 5.0) * smoothstep(0.02, 0.35, puddleW) * (1.0 - smoothstep(8.0, 25.0, dist));
     col += lerp(refl, sky, 0.3) * (ringK * 0.08 * reflVis);
 
+    // 1.0.2: the wet film's highlights of the level's lights (street lamps), on the film this pass draws and in puddles
+    float wetGl = max(puddleWet, filmOwn);
+    if (rpLightK.y > 0.5 && wetGl > 0.01)
+    {
+        float3 eye = -V;
+        float glR = max(puddleRough, rpLightK.z);
+        float3 gl = float3(0.0, 0.0, 0.0);
+        float gd = 0.0;
+        const int nL = int(rpLightK.y + 0.5);                // 1.1.1: up to 24 lamps
+        if (nL > 0) rpLightGlint(P, Np, eye, glR, rpLightA0, rpLightB0, rpLightC0, gl, gd);
+        if (nL > 1) rpLightGlint(P, Np, eye, glR, rpLightA1, rpLightB1, rpLightC1, gl, gd);
+        if (nL > 2) rpLightGlint(P, Np, eye, glR, rpLightA2, rpLightB2, rpLightC2, gl, gd);
+        if (nL > 3) rpLightGlint(P, Np, eye, glR, rpLightA3, rpLightB3, rpLightC3, gl, gd);
+        if (nL > 4) rpLightGlint(P, Np, eye, glR, rpLightA4, rpLightB4, rpLightC4, gl, gd);
+        if (nL > 5) rpLightGlint(P, Np, eye, glR, rpLightA5, rpLightB5, rpLightC5, gl, gd);
+        if (nL > 6) rpLightGlint(P, Np, eye, glR, rpLightA6, rpLightB6, rpLightC6, gl, gd);
+        if (nL > 7) rpLightGlint(P, Np, eye, glR, rpLightA7, rpLightB7, rpLightC7, gl, gd);
+        if (nL > 8) rpLightGlint(P, Np, eye, glR, rpLightA8, rpLightB8, rpLightC8, gl, gd);
+        if (nL > 9) rpLightGlint(P, Np, eye, glR, rpLightA9, rpLightB9, rpLightC9, gl, gd);
+        if (nL > 10) rpLightGlint(P, Np, eye, glR, rpLightA10, rpLightB10, rpLightC10, gl, gd);
+        if (nL > 11) rpLightGlint(P, Np, eye, glR, rpLightA11, rpLightB11, rpLightC11, gl, gd);
+        if (nL > 12) rpLightGlint(P, Np, eye, glR, rpLightA12, rpLightB12, rpLightC12, gl, gd);
+        if (nL > 13) rpLightGlint(P, Np, eye, glR, rpLightA13, rpLightB13, rpLightC13, gl, gd);
+        if (nL > 14) rpLightGlint(P, Np, eye, glR, rpLightA14, rpLightB14, rpLightC14, gl, gd);
+        if (nL > 15) rpLightGlint(P, Np, eye, glR, rpLightA15, rpLightB15, rpLightC15, gl, gd);
+        if (nL > 16) rpLightGlint(P, Np, eye, glR, rpLightA16, rpLightB16, rpLightC16, gl, gd);
+        if (nL > 17) rpLightGlint(P, Np, eye, glR, rpLightA17, rpLightB17, rpLightC17, gl, gd);
+        if (nL > 18) rpLightGlint(P, Np, eye, glR, rpLightA18, rpLightB18, rpLightC18, gl, gd);
+        if (nL > 19) rpLightGlint(P, Np, eye, glR, rpLightA19, rpLightB19, rpLightC19, gl, gd);
+        if (nL > 20) rpLightGlint(P, Np, eye, glR, rpLightA20, rpLightB20, rpLightC20, gl, gd);
+        if (nL > 21) rpLightGlint(P, Np, eye, glR, rpLightA21, rpLightB21, rpLightC21, gl, gd);
+        if (nL > 22) rpLightGlint(P, Np, eye, glR, rpLightA22, rpLightB22, rpLightC22, gl, gd);
+        if (nL > 23) rpLightGlint(P, Np, eye, glR, rpLightA23, rpLightB23, rpLightC23, gl, gd);
+        // Calibrated by the frame itself: the light the engine put on this spot (pre-exposed, in its own units) is the
+        // frame's brightness here over the asphalt's albedo; the darkest of 5 taps, so road paint and texture do not
+        // count. The film reflects that light in the lamps' directions: x (specular / diffuse) of the light model above.
+        // rpLightK.w: 1 at night, 0 by day (Lua; by day the sun lights the road, not the lamps).
+        float lumF = dot(src.rgb, float3(0.2126, 0.7152, 0.0722));
+        lumF = min(lumF, dot(rpLoadColor(p + int2(5, 0)), float3(0.2126, 0.7152, 0.0722)));
+        lumF = min(lumF, dot(rpLoadColor(p - int2(5, 0)), float3(0.2126, 0.7152, 0.0722)));
+        lumF = min(lumF, dot(rpLoadColor(p + int2(0, 4)), float3(0.2126, 0.7152, 0.0722)));
+        lumF = min(lumF, dot(rpLoadColor(p - int2(0, 4)), float3(0.2126, 0.7152, 0.0722)));
+        float lit = saturate(gd * 6000.0);                    // only where the listed lamps light the road (within ~30 m)
+        col += gl * (lumF / 0.12 / max(gd, 1e-7)) * (rpLightK.x * rpLightK.w * lit * wetGl);
+    }
+
     // ---- debug views ---------------------------------------------------------------------
     if (dbgMode > 0.5)
     {
@@ -882,6 +1134,15 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
             // Surroundings capture as the reflections read it: the captured scene where a ray is covered, dark red
             // where the capture has no coverage (too low an angle) or is switched off.
             col = lerp(float3(0.25, 0.02, 0.02) * dbgBright, envS.rgb, envS.a);
+        }
+        else if (dbgMode > 19.5 && dbgMode < 20.5)
+        {
+            // 1.2 puddle slope gate on the ground: green = level enough for puddles, red = too steep, yellow between;
+            // stripes every 1 % of slope (rise over run), so the grade can be read off the road
+            float band = step(0.82, frac(slopeT * 100.0)) * step(slopeT, 0.3);
+            float3 g = lerp(float3(1.0, 0.08, 0.05), float3(0.1, 1.0, 0.2), levelK);
+            g = lerp(g, float3(1.0, 0.9, 0.1), (1.0 - abs(levelK * 2.0 - 1.0)) * 0.6);
+            col = lerp(col * 0.35, g * dbgBright * (1.0 - 0.35 * band), saturate(surfBase * 4.0));
         }
         else if (dbgMode > 12.5 && dbgMode < 13.5)
         {

@@ -22,7 +22,7 @@ cbuffer perDraw : register(b0)
     uniform float4 rpWindD;    // xyz plane up (along the glass), w droplet radius (m)
     uniform float4 rpWindE;    // x seconds since the current wiper cycle started, y sweep time, z cycle period,
                                // w flags: 1 = has wiped, 2 = repeating, 4 = a previous cycle exists
-    uniform float4 rpWindF;    // x smear width, y (unused, no drawn blades), z rain, w refraction
+    uniform float4 rpWindF;    // x smear width, y Fresnel of the glass drops (1.2), z rain, w refraction of the glass drops
     uniform float4 rpWindG;    // x vehicle speed, y active, z screen aspect, w 1 = camera outside the car (1.0)
     uniform float4 rpWindH;    // x blade park angle, y sweep range (rad), z rain clock, w rain clock rate (per second)
     uniform float4 rpWindI;    // x wiper passes before the current cycle (generation counter), y unused,

@@ -43,11 +43,11 @@ export async function onLoad() {
   } catch (e) {
     console.error("[RainPuddles] route registration error", e)
   }
-  // Shared "Mods" pause tab: Pause menu -> Mods -> Rain Puddles
+  // Shared "Mods" pause tab: Pause menu -> Mods -> ForeverWEATHER (1.2: was "Rain Puddles")
   await lua.extensions.ui_pause_actions.registerModButton({
     id: PAUSE_BUTTON_ID,
     tabId: "mods",
-    label: "Rain Puddles",
+    label: "ForeverWEATHER",
     icon: "wrench",
     componentName: `${MOD_ROOT}/views/RainPuddlesCard.vue`,
   })

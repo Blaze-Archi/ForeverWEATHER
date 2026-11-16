@@ -210,6 +210,13 @@ float2 rpRipples(float2 p, float t)
     return g;
 }
 
+// 1.1: is this depth-buffer value the sky? BeamNG 0.40 stores depth reversed (the sky is 0); the older convention (1) counts
+// too. (Found in 1.1: the sky tests of 1.0 only knew 1, so the drops and the Midnight grade never saw the sky.)
+bool rpIsSkyDepth(float ndc)
+{
+    return ndc <= 0.000001 || ndc >= 0.99999;
+}
+
 float rpFresnel(float f0, float cosTheta)
 {
     float m = 1.0 - rpSaturate(cosTheta);
@@ -249,5 +256,18 @@ float4 rpRand4(uint h)
 {
     return float4(float(h & 255u), float((h >> 8) & 255u), float((h >> 16) & 255u), float(h >> 24)) / 255.0;
 }
+
+// 1.2 droplet atlas (art/rainPuddles/droplet_atlas2.data.png): 4 tiles wide, 8 high, 128 px each (8 px padding).
+// Tiles 0-7 round beads, 8-11 teardrops, 12-14 flat merged drops, 15 calibration colour, 16-19 elongated teardrops
+// (a slim line swelling into a small round head, radius 0.18 at q.y = +0.70, toward +q.y like the teardrops' heads),
+// 20-31 empty. q = tile space, |q| <= 1.
+float2 rpAtlasUV(float2 q, float tile)
+{
+    float2 t = float2(fmod(tile, 4.0), floor(tile * 0.25));
+    return (t + 0.0625 + (q * 0.5 + 0.5) * (112.0 / 128.0)) * float2(0.25, 0.125);
+}
+
+// centre of the calibration tile 15 (column 3, row 3)
+static const float2 RP_ATLAS_CAL_UV = float2(0.875, 0.4375);
 
 #endif

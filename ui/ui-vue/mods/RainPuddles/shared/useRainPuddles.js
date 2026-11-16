@@ -18,7 +18,7 @@ const state = reactive({
   loaded: false,
   error: "",
   transport: "",
-  open: { ground: true, puddles: true, weather: false, rainfx: false, droplets: false, lens: false, windshield: false, spray: false, hydro: false, debug: false },
+  open: { midnight: false, ground: true, puddles: true, weather: false, rainfx: false, droplets: false, lens: false, windshield: false, spray: false, hydro: false, debug: false },
 })
 
 let users = 0
@@ -219,6 +219,11 @@ export function useRainPuddles() {
       callExt("applyPreset", [String(name)])
       lastEdit = 0
       setTimeout(refresh, 300)
+    },
+    randomMood: () => {
+      callExt("randomMood")
+      lastEdit = 0
+      setTimeout(refresh, 400)
     },
     rescanWindshield: () => callExt("rescanWindshield"),
     snapWetness: () => callExt("snapWetness"),

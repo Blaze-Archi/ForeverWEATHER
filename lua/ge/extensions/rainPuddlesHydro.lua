@@ -70,7 +70,13 @@ M.onWheels = function(vid, payload)
             segStr = '{' .. table.concat(s, ',') .. '}'
           end
         end
-        parts[#parts + 1] = string.format('[%q]={open=%s,segs=%s}', name, num(open), segStr)
+        -- 1.2: no puddles on sloping ground (the shader's slope gate, from casts around the tyre)
+        local flat = 1
+        if e.puddles and rp and rp.hydroFlat then
+          local okF, f = pcall(rp.hydroFlat, x, y, z)
+          if okF and tonumber(f) then flat = math.max(0, math.min(1, f)) end
+        end
+        parts[#parts + 1] = string.format('[%q]={open=%s,segs=%s,flat=%s}', name, num(open), segStr, num(flat))
       end
     end
   end

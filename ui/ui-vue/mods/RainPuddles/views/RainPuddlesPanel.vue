@@ -1,11 +1,16 @@
 <template>
   <div class="rp-panel">
     <div class="rp-head">
-      <span class="rp-title">Rain Puddles &amp; Droplets</span>
-      <span class="rp-muted">v{{ VERSION }}</span>
+      <span class="rp-title">ForeverWEATHER</span>
+      <span class="rp-muted">Rain Puddles &amp; Droplets v{{ VERSION }}</span>
     </div>
 
     <div v-if="state.error" class="rp-note rp-warn">{{ state.error }}</div>
+    <div v-if="state.diag && state.diag.external && (state.diag.external.keys || []).length" class="rp-note">
+      Weather: <b>{{ state.diag.external.label }}</b> sets {{ (state.diag.external.keys || []).length }} settings right now
+      (rain, wetness, puddles, spray, drops). Your own values come back when it stops; anything you change meanwhile is
+      kept for then.
+    </div>
 
     <div class="rp-toggles">
       <BngSwitch
@@ -28,8 +33,31 @@
     <div class="rp-actions">
       <BngButton v-for="p in PRESETS" :key="p.k" @click="rp.applyPreset(p.k)">{{ p.l }}</BngButton>
     </div>
+    <div class="rp-muted">Or let it pick a moody weather: a look, the time of day, a new sun direction and haze (blue hour
+      drizzle, golden storm, grey downpour, dawn mist or Midnight).</div>
+    <div class="rp-actions">
+      <BngButton @click="rp.randomMood()">Random mood</BngButton>
+      <span v-if="state.diag && state.diag.mood" class="rp-muted">Now: <b>{{ state.diag.mood }}</b></span>
+    </div>
+    <BngSwitch :model-value="!!state.s.moodOnLoad" @update:model-value="rp.set('moodOnLoad', $event)">
+      A random mood on every map
+    </BngSwitch>
 
     <RpSlider v-for="x in SLIDERS.general" :key="x.k" v-bind="sliderProps(x)" @change="rp.set(x.k, $event)" />
+
+    <RpSection title="Midnight" :open="state.open.midnight" @toggle="rp.toggle('midnight')">
+      <div class="rp-muted">The night street-racer look: soaked streets that stay wet in a fine drizzle, dark asphalt that
+        mirrors every lamp with long light streaks, glassy puddles, the clock at midnight and a night film grade (calm
+        colours, milky teal-grey blacks, haze and halos around the street lamps). The 'Midnight' quick look sets all of
+        it.</div>
+      <BngSwitch :model-value="!!state.s.midnight" @update:model-value="rp.set('midnight', $event)">
+        Midnight
+      </BngSwitch>
+      <BngSwitch :model-value="!!state.s.midnightClock" @update:model-value="rp.set('midnightClock', $event)">
+        Hold the clock at midnight (your time comes back when Midnight goes off)
+      </BngSwitch>
+      <RpSlider v-for="x in SLIDERS.midnight" :key="x.k" v-bind="sliderProps(x)" @change="rp.set(x.k, $event)" />
+    </RpSection>
     <BngSwitch :model-value="!!state.s.autoClouds" @update:model-value="rp.set('autoClouds', $event)">
       Cloud the sky over while it rains
     </BngSwitch>
@@ -45,7 +73,7 @@
       <div class="rp-note rp-muted">Ground reflection drawn by: <b>{{ rp.groundEngineText() }}</b></div>
       <RpSlider v-for="x in SLIDERS.groundReflBoth" :key="x.k" v-bind="sliderProps(x)" @change="rp.set(x.k, $event)" />
       <BngSwitch :model-value="!!state.s.stochasticGloss" @update:model-value="rp.set('stochasticGloss', $event)">
-        Stochastic glossy reflections (experimental, needs TAA / DLSS / FSR)
+        Stochastic glossy reflections (experimental: grainy and flickers while driving)
       </BngSwitch>
       <RpSelect label="Reflection engine" :value="state.s.reflectionMode" :options="REFLECTION_MODES"
         hint="Auto: the mod draws the wet road itself (no hitches, dry in tunnels). Native: BeamNG's own PBR + SSR on the road materials; they are rewritten a few per frame whenever the wetness changes (that costs frame time), and tunnel roads shine too. Puddles always use the mod's trace."
@@ -159,7 +187,7 @@
         normal or fast with the rain and your speed; 'Wiper speed' scales all of them. The glass clears where the car's
         own wipers sweep (read from its wiper mesh); no extra blades are drawn. With the "Animated Wipers" mod installed,
         its blades are switched by the rain sensor and the glass clears exactly as they move (switch them by hand and
-        Rain Puddles follows you instead). The glass outline comes from the car's own glass mesh.</div>
+        ForeverWEATHER follows you instead). The glass outline comes from the car's own glass mesh.</div>
       <div class="rp-note rp-muted">Glass: {{ rp.windshieldText() }}</div>
       <BngButton @click="rp.rescanWindshield()">Re-scan windshield</BngButton>
       <BngButton @click="rp.sweep()">Single wiper sweep</BngButton>

@@ -13,6 +13,11 @@
 // perspective - no Lua-side projection or FOV assumption any more.
 // Strength = water at the contact point (puddle field or wet road) x tread speed (spin) / ground speed; wheelspin and
 // sliding add more. Positions follow per-tyre spray clocks from Lua, so speed changes never make the puffs jump.
+// 1.1: no more popping. Each puff carries the water of the spot where it LEFT the tyre (the contact point as it was when
+// the puff was thrown: the tyre has moved on since), so entering a puddle grows the plume backward from the tyre and
+// leaving one lets it detach and drift away; before, the whole plume switched with the water right under the tyre. Lua
+// fades the cover under the tyre (roofs, tunnels), traffic tyres coming and going, and the 10 Hz tread speed. The spray
+// keeps building a little with speed, and puffs differ in strength (gusty).
 
 float rpSprayNoise(float2 p)
 {
@@ -105,17 +110,23 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
             const float tread = tB[ti].w;                 // tread speed (spin)
             const float v = max(g, tread);
             const float slip = saturate(abs(tread - g) / 6.0);
-            const float speedK = smoothstep(rpSplashA.z * 0.5, rpSplashA.z + 6.0, v);
+            // 1.1: from half the threshold speed up, full a little above it, then still a little more up to ~120 km/h
+            const float speedK = smoothstep(rpSplashA.z * 0.4, rpSplashA.z + 7.0, v) * (0.8 + 0.2 * smoothstep(12.0, 34.0, v));
 
             // water at the contact: puddle, or the wet road ('Only on puddles' 1 = puddles only)
             const float pud = rpSprayPuddle(c0.xy);
             const float roadWater = 0.6 * pow(saturate(rpSplashA.w), 0.6);
             const float water = lerp(max(pud, roadWater), pud, saturate(rpSplashB.w));
             const float distFade = 1.0 - smoothstep(rpSplashC.y * 0.55, rpSplashC.y, length(c0 - rpCam.xyz));
-            const float roadWet = saturate((tC[ti].y - 0.5) * 2.0);       // 1.0: 0 under a roof / in a tunnel
-            const float strength = rpSplashA.x * speedK * water * (1.0 + 0.6 * pud) * (1.0 + slip) * distFade * roadWet;
+            const float roadWet = saturate((tC[ti].y - 0.5) * 2.0);       // 1.0: 0 under a roof / in a tunnel (1.1: faded in Lua)
+            // 1.1: the tyre's part of the strength; the water comes per puff (where it was thrown)
+            const float tyreK = rpSplashA.x * speedK * (1.0 + slip) * distFade * roadWet;
+            const float strength = tyreK * water * (1.0 + 0.6 * pud);
+            // seconds a puff lives: Lua runs the spray clock at 0.9 + 0.075 x speed per second
+            const float lifeS = 1.0 / max(0.9 + 0.075 * v, 0.1);
+            const float roadOnly = saturate(rpSplashB.w);
 
-            if (strength > 0.003)
+            if (tyreK * 1.6 > 0.003)
             {
                 const float L = (0.6 + v * 0.11) * sz;     // plume length behind the tyre (m)
                 const float Hh = (0.18 + v * 0.022) * sz;  // plume rise (m)
@@ -132,6 +143,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
                 if (dot(perpB, perpB) < rb * rb && tcb > -rb && sceneDist > tcb - rb)
                 {
                     dbgGate = max(dbgGate, water * speedK);
+                    float sMax = 0.0;
                     const float clk = tC[ti].z;
                     const float seedT = tC[ti].w;
                     float dens = 0.0;
@@ -147,6 +159,12 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
                         float jr = rpRand(hk) - 0.5;
                         float jr2 = rpRand(rpPcg(hk ^ 0x1B873593u)) - 0.5;
                         float ea = 1.0 - (1.0 - a) * (1.0 - a);               // thrown fast, slowed by the air
+                        // 1.1: the water where this puff left the tyre (age in seconds x ground speed behind the tyre now)
+                        float ageS = a * lifeS / rate;
+                        float pudK = rpSprayPuddle(c0.xy - dir2 * (g * ageS));
+                        float waterK = lerp(max(pudK, roadWater), pudK, roadOnly) * (1.0 + 0.6 * pudK);
+                        float gust = 0.7 + 0.6 * rpRand(rpPcg(hk ^ 0xE6546B64u));   // puffs differ: a gusty plume
+                        sMax = max(sMax, waterK);
                         float3 c;
                         float r;
                         float w;
@@ -155,14 +173,14 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
                             c = c0 + back * (L * ea) + up * (Hh * (0.25 + 0.75 * a) * (0.6 + 0.4 * ea) + jr2 * 0.06 * sz)
                               + side * (jr * (hw * 1.4 + 0.35 * a * L));
                             r = (0.10 + 0.35 * a) * sz * (0.5 + 0.06 * v) + hw * 0.6;
-                            w = smoothstep(0.0, 0.12, a) * pow(1.0 - a, 1.4);
+                            w = smoothstep(0.0, 0.12, a) * pow(1.0 - a, 1.4) * waterK * gust;
                         }
                         else
                         {
                             c = c0 + side * (sideK * (hw + 0.15 + 0.55 * ea * (0.4 + 0.05 * v) * sz)) + back * (L * 0.35 * ea)
                               + up * (Hh * 0.8 * sin(3.1416 * a) + jr2 * 0.04 * sz);
                             r = (0.08 + 0.22 * a) * sz * (0.5 + 0.05 * v);
-                            w = smoothstep(0.0, 0.10, a) * pow(1.0 - a, 1.6) * smoothstep(0.15, 0.5, pud);
+                            w = smoothstep(0.0, 0.10, a) * pow(1.0 - a, 1.6) * smoothstep(0.15, 0.5, pudK) * waterK * gust;
                         }
                         float3 rc = c - rpCam.xyz;
                         float tc = dot(rc, rd);
@@ -189,7 +207,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
                         uint hsp = rpHash3(int3(int(floor(sg.x)), int(floor(sg.y)), ti * 17 + 3));
                         float2 fsp = frac(sg) - 0.5;
                         float spark = step(0.965, rpRand(hsp)) * (1.0 - smoothstep(0.05, 0.18, length(fsp)))
-                                    * exp(-max(dot(X, back), 0.0) / max(L * 0.5, 0.1)) * saturate(dens * 3.0);
+                                    * exp(-max(dot(X, back), 0.0) / max(L * 0.5, 0.1)) * saturate(dens * 3.0) * saturate(sMax);
 
                         // light (1.0): the mist scatters the sky's light (ambient SH) and the light of the lit road
                         // beside the tyre. 0.9 took its brightness from the screen right around the tyre, which behind
@@ -208,9 +226,10 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
                         float mistL = max(max(rpLuma(amb) * 1.15, envL * 0.9), max(rpLuma(src.rgb) * 0.9, 0.06));
                         float3 mist = float3(0.82, 0.87, 0.93) * mistL;
                         // 1.0: a light mist (in-game feedback, twice: too thick): thin and never more than 28 % opaque
-                        float alpha = saturate((1.0 - exp(-dens * 0.5)) * strength);
+                        // 1.1: the water is already in each puff's weight (dens), the tyre's part scales it
+                        float alpha = saturate((1.0 - exp(-dens * 0.5)) * tyreK);
                         col = lerp(col, mist, min(alpha, 0.28));
-                        col += mist * (0.03 * alpha) + float3(1.0, 1.0, 1.0) * (spark * mistL * 0.8 * saturate(strength));
+                        col += mist * (0.03 * alpha) + float3(1.0, 1.0, 1.0) * (spark * mistL * 0.8 * saturate(tyreK * sMax));
                         dbgDens = max(dbgDens, alpha);
                     }
                 }

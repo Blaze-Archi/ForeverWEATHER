@@ -11,7 +11,7 @@ export const routeRecords = [
     component: RainPuddlesScreen,
     meta: {
       luaRoute: {
-        title: "Rain Puddles & Droplets",
+        title: "ForeverWEATHER: Rain Puddles & Droplets",
         backTarget: "menu",
         scopeTree: { "rain-puddles-route": {} },
       },
