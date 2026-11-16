@@ -2,9 +2,9 @@
 
 # ForeverWEATHER: Rain Puddles & Droplets
 
-Falling rain, wet roads, puddles with reflections, node-based hydroplaning, body droplets, rain on the windshield, rear and side windows with real wipers, dry tunnels, and tyre spray.
+Falling rain, wet roads, puddles with reflections, node-based hydroplaning, body droplets, rain on the windshield, rear and side windows with real wipers, lens drops, dry tunnels, tyre spray, and a night street-racer look.
 
-A graphics and physics mod for **BeamNG.drive 0.40.x** (version 1.0.0 **Alpha**). Everything is drawn by the mod's own compute
+A graphics and physics mod for **BeamNG.drive 0.40.x** (version 1.2.0 **Alpha**). Everything is drawn by the mod's own compute
 shaders and Lua; it needs no other mod.
 
 > **DX12 and Vulkan only.** DX11 doesn't support SSR on BeamNG.drive currently, and the mod utilizes SSR for the puddles.
@@ -19,17 +19,19 @@ shaders and Lua; it needs no other mod.
 
 ## What it does
 
-- Wet asphalt that darkens and turns glossy with the rain, plus puddles on roads with screen-space reflections and rain ripples.
-- Droplets on every nearby car that bead, run off with gravity and stream backward with the airflow.
+- Wet asphalt that darkens and turns glossy with the rain, plus puddles on roads with screen-space reflections, rain ripples and tyre wakes. Water only stands on level ground: no puddles on hills.
+- Droplets on every nearby car: round beads, teardrops and elongated running drops that bead, run off with gravity and stream backward with the airflow. Each one is a small lens: clear water that shows an upside-down view of what is around it.
 - Rain on your car's windshield, rear / hatch glass and side windows, from the driver's seat and from outside, cleared by automatic rain-sensing wipers.
+- Drops on the camera lens all over the screen, blown toward the edges as you drive.
 - Node-based hydroplaning (Arcade / Simcade / Sim): the water under each tyre's contact-patch nodes (the road film and exactly the puddles you see) lifts them off the road against the tyre's own pressure and drags them back, so grip fades in deep water at speed and one wheel in a puddle pulls the car.
 - Tunnels, bridges and roofs: the ground under them stays dry and does not reflect, no rain lands on the glass there, the wipers finish a couple of sweeps and stop, and the drops on the cars slowly go (faster the faster you drive).
 - Works together with the "Animated Wipers" mod if you have it (optional; nothing of it is included or changed): the rain sensor uses that mod's own wiper switch, and the glass clears exactly as its blades move.
 - Its own falling rain, drawn on the graphics card instead of BeamNG's particle rain (which costs about 4 ms of CPU time per frame in heavy rain). Each drop refracts the scene behind it like a tiny lens.
-- Tyre spray and wakes in puddles, camera lens droplets.
-- Ground gets wet and dries over time; can follow the game's own weather.
+- Tyre spray and wakes in puddles.
+- **Midnight:** a night street-racer look with soaked streets, the street lamps' halos in the wet night air (each lamp in its own colour), a glow of the city on the overcast sky and a night film grade. A **Random mood** button picks a moody weather: blue hour drizzle, golden storm, grey downpour, dawn mist or Midnight.
+- The ground gets wet and dries over time. It can follow the game's own weather, and on the BeamNG.Earth map that map's real weather (the bridge is built in).
 
-**Pause menu > Mods > Rain Puddles.** Not sure what to tune? Use the Quick look buttons (Damp / Wet / Storm / Flooded) at the top. Console: `extensions.rainPuddles.openUI()`
+**Pause menu > Mods > ForeverWEATHER.** Not sure what to tune? Use the Quick look buttons (Damp / Wet / Storm / Flooded / Midnight) at the top. Console: `extensions.rainPuddles.openUI()`
 
 ## Hydroplaning
 
@@ -38,8 +40,9 @@ Node-based, in each car's own physics at the physics rate (2000 Hz):
 1. **Contact patch.** Every tyre's tread nodes are put in ring order around the axle; the ones touching the road are
    followed as the wheel turns.
 2. **Water under each node.** The road's water film plus the puddles, from exactly the puddle field the shader draws
-   (the same masks, tiling, coverage and depth ramp), inside the road lanes, never under a roof, and only on hard ground
-   (asphalt, concrete, cobbles). Dirt, grass and sand soak the water up.
+   (the same masks, tiling, coverage and depth ramp), inside the road lanes, never under a roof, only on level ground
+   (the same slope limit as the puddles you see) and only on hard ground (asphalt, concrete, cobbles). Dirt, grass and
+   sand soak the water up.
 3. **Drainage.** The tread drains what it can: tread depth by tyre type (slicks, semi-slicks, race, off-road tyres are
    recognised by part name) or the *Tread depth* setting, less at speed.
 4. **Lift.** The water pressure in front of the patch, ½ ρ v² C_L, against the tyre's real inflation pressure, carries
@@ -82,56 +85,49 @@ In game, at the author's own graphics settings, not edited.
 ## Install
 
 1. Close the game.
-2. Download [`release/rainPuddles.zip`](release/rainPuddles.zip) and put it, still zipped, into
-   `<BeamNG user folder>/current/mods/` (remove older `rainPuddles` / `rain_puddles` zips first).
-3. Start the game, load a map, press Esc and open **Mods > Rain Puddles**.
+2. Download `ForeverWEATHER.zip` from the [latest release](https://github.com/Blaze-Archi/ForeverWEATHER/releases/latest)
+   (or [`release/ForeverWEATHER.zip`](release/ForeverWEATHER.zip)) and put it, still zipped, into
+   `<BeamNG user folder>/current/mods/`. Remove older `rainPuddles.zip` / `rain_puddles` zips and the old
+   `rainPuddles_earth.zip` companion first: since 1.2.0 the zip is called ForeverWEATHER, and the BeamNG.Earth bridge has
+   been inside it since 1.0.2. Your settings stay.
+3. Start the game, load a map, press Esc and open **Mods > ForeverWEATHER**.
 
 Add or remove the zip only while the game is closed: the game's mod manager drops a zip that appears or disappears
 while it runs.
 
-The repository root has the same layout as the zip (`art/`, `lua/`, `scripts/`, `shaders/`, `ui/`), so a copy of it in
-`mods/unpacked/rainpuddles/` also works for development. After editing a shader, rename its folder
+The repository root has the same layout as the zip (`art/`, `lua/`, `mod_info/`, `scripts/`, `shaders/`, `ui/`), so a
+copy of it in `mods/unpacked/foreverweather/` also works for development. After editing a shader, rename its folder
 (`shaders/common/postFx/rainPuddlesNN`) and `shaderDir` in `lua/ge/extensions/rainPuddles.lua`, or the game keeps the
 compiled old one.
 
-## 1.0.0 changes
+## What's new in 1.2.0
 
-- New: node-based hydroplaning, in each car's own physics (2000 Hz). Every tyre's tread nodes are put in ring order; the ones touching the road are followed as the wheel turns, and each finds the water under it: the road's water film plus the puddles from exactly the field the puddle shader draws, inside the lanes, never under a roof, only on hard ground. The tread drains what it can (tread depth by tyre type: slicks, semi-slicks, race, off-road, or the 'Tread depth' setting), and the water pressure in front of the patch (1/2 rho v^2 C_L, against the tyre's real inflation pressure) carries part of each node's load, so BeamNG's own tyre physics loses the grip there. The water the tyre pushes aside drags it back. Arcade / Simcade / Sim, 'Water strength', traffic too, and a debug view of the contact patches. Tested on the West Coast USA drag strip at 105 km/h through storm puddles.
-- Fixed: stutter in the rain. Auto mode used to rewrite the game's road materials for the wet look (59 materials on West Coast USA, each rewrite froze the game for about 0.2 s, up to once a second while the wetness changed, and near every tunnel or bridge). Auto now draws the wet road with the mod's own film (dry under roofs too); 'Native PBR + SSR' still uses the materials, a few per frame.
-- Fixed: the roads-only puddle mask searched the whole road network 1-4 times a second while driving (1.5-5 ms each time); it uses a spatial index now.
-- New: drops on the side windows (door and quarter glass) of your car, read from its own glass meshes, from the seat and from outside. They bead, run back with the airflow and run down when parked. Setting: 'Drops on the side windows too'.
-- New: tunnels, bridges and roofs. Upward checks around the camera find what is covered: the ground there stays dry (no wet film, puddles or reflections), the tyres throw no spray, no new rain lands on the glass, the rain sensor gives a couple more sweeps (two, three when driving fast) and parks the wipers, and the drops on the cars slowly go (about 2.5 minutes parked, about 10 seconds at highway speed). Back in the rain everything returns within seconds. Near a tunnel the mod draws the wet road itself instead of the game's wet road materials, which would also shine inside the tunnel.
-- Changed: the falling rain looks like water now. Each drop shows the scene behind it, bent like through a small lens (80 %), and a little of the sky (20 %), with its colours softened, so it never takes on a strong colour. Near drops are out of focus, the ends of each streak fade out, and there are less than half as many drops. At night the drops still catch the lights of the scene.
-- Changed: a much lighter tyre spray (thinner mist, at most 28 % opaque, default strength 0.3).
-- Changed defaults: the longest and thickest reflection traces (48 steps, 2 m) for puddles and the wet road, so more of what is under and behind the cars shows in the reflections; stochastic glossy reflections on by default when a temporal upscaler (XeSS, DLSS, FSR) or TAA is on; glassier puddles and a slightly darker wet road. Settings you changed yourself are kept.
-- Fixed: with Animated Wipers, right after its wipers were switched off the rain sensor could misread that mod's wiper switch as moved by hand and stop following the rain.
-- New: falling rain drawn on the graphics card. Streaks with real depth that lean with the wind and rush at you when driving, no rain under roofs, bridges or in tunnels or inside your car, visible at night too (lit by lamps and headlights). It replaces BeamNG's particle rain, which is now off by default (you can still switch it on).
-- New: 'Rain droplet size' (mm). The falling rain, the beads on the cars and the drops on the glass all scale with it, and the Quick looks set it. Drops are smaller by default.
-- New: every bead on the cars and the glass has its own outline (stretched, a little lumpy) instead of a perfect circle.
-- New: a measured wiper model per car. Each blade's pivot, reach and sweep and the part of the glass it wipes are measured in game for every car (nothing is stored per car): from where the Animated Wipers blades turn and how far, when that mod is installed, otherwise from the car's own wiper mesh. The glass clears exactly there, and the rain sensor picks the wiper speed by how much glass the blades clear per minute. Debug view 'Wiper model'; console: extensions.rainPuddles.getWiperModel().
-- New: rear wiper on cars that have one (its own intermittent timing, or Animated Wipers' rear blade).
-- New: optional 'Surroundings' reflection fallback. A small extra view of the scene above the camera, so puddle reflections that leave the top of the screen show trees, bridges and buildings instead of open sky. Its size follows the game's Dynamic Reflections quality.
-- New: Quick look presets (Damp, Wet, Storm, Flooded) that set the rain and the whole wet road in one click.
-- New: a more reflective wet road that still looks like asphalt: reflections build up toward grazing angles instead of turning the road into a mirror right in front of the car.
-- New: the sky clouds over automatically while it rains; the level's own clouds come back when it stops.
-- New: windshield rain follows the car's real glass. Its outline and curve are read from the car's own glass mesh (the jbeam windshield frame is the fallback), so rain stays off the dashboard, pillars, headliner, mirror and sunroof.
-- New: drops on the rear / hatch glass too (read from the car's tailgate / rear-window glass mesh).
-- New: windshield rain is also visible when you look at your car from outside, and the glass drops behave like the body drops: they bead, run down when parked, get blown up the glass at speed and streak, and braking or cornering moves them.
-- New: the glass clears where the car's own wipers sweep. Blade count, pivots, lengths and parked angles are read from each car's wiper mesh in game. No fake blades are drawn.
-- New: rain-sensing wipers. They start by themselves when rain lands on the glass and switch between intermittent, normal and fast with the rain and your speed; the glass clears at the speed in use. On a car with a wiper switch (e.g. the Midsize stalk) the switch follows.
-- New: works together with the "Animated Wipers" mod when it is installed (nothing of it is included or changed). The rain sensor uses that mod's own wiper switch, the glass clears exactly when and as far as its blades sweep, and if you switch them by hand Rain Puddles follows you.
-- Fixed: no more puddles, ripples or wet film inside a car (its floor, seats and dashboard, seen from the seat or through the glass).
-- Fixed: rain ripples only in puddles, smaller and more like real rain rings (no flat rings across the road).
-- Fixed: after resetting the car at speed, the lens drops and the glass drops kept streaking and slowed down over a second; they stop at once now.
-- Fixed: the glass cleared in real time even in slow motion or pause; the wipers and the clearing now follow the simulation speed.
-- Fixed: with Animated Wipers, the glass now clears exactly under its blades (the driver-side blade was read the wrong way round).
-- Fixed: puddles and droplets sliding along when the camera moves (the camera position was one frame old). With that, puddles and wet film no longer show on the front or back of a moving car.
-- Fixed: tyre spray behind a dark car looked like dark smoke; it is now a pale mist lit by the sky.
-- Fixed: grainy speckles in wet-road reflections (most visible in a car's own mirror image).
-- Fixed: with XeSS / DLSS / FSR upscaling, the windshield, tyre spray and puddle reflections read depth from the wrong spot.
-- Fixed: droplets inside the cabin (headrests, dashboard, parcel shelf seen through the glass), using each car's roof line.
-- Fixed: running droplets clipped at high speed (search window too small for long streaks).
-- 12 cars (was 6) are kept free of puddles; right-hand-drive cars get mirrored wipers; official in-car camera detection; "open settings" console command fixed.
+- **Renamed:** the zip is `ForeverWEATHER.zip` now, and the game's mod manager shows the mod's icon and description.
+- **Drops on the cars are clear water, not bubbles.** Fresnel 0.12 (was 1.0, which turned every bead's rim into a
+  mirror), refraction 1.75 (was 1.0; the slider goes to 2.5). The street lamps no longer colour the beads.
+- **Elongated teardrops.** A new droplet shape, a slim line that swells into a small round head, for the drops running
+  over the car (most of them at speed). Round beads and teardrops stay.
+- **Glass drops** (windshield, rear and side windows) have their own *Refraction* and *Fresnel* sliders.
+- **Lens drops all over the screen.** Rain lands anywhere on the lens, also in the middle, and drifts to the edges more
+  gently as you drive (about 3 times slower than before). Round, with a slight hint of a teardrop.
+- **No puddles on slopes.** Puddles fade out between 3 % and 5 % grade (new slider: *Steepest ground for puddles*). The
+  slope is measured from the road's real shape (the depth buffer), and hydroplaning uses the same limit.
+- **From 1.1.1** (not released on its own): puddles and the wet ground reach further (sliders up to 600 m and 800 m),
+  up to 24 street lamps within 300 m light the wet road and Midnight's air, and Midnight keeps every light's own colour.
+
+Full notes: [docs/history/CHANGES_v1.2.0.md](docs/history/CHANGES_v1.2.0.md).
+
+## Earlier versions
+
+- [1.1.0](docs/history/CHANGES_v1.1.0.md): Midnight's night film with lamp halos in the air, random moody weather,
+  Fresnel and much stronger refraction for the drops on the cars, tyre spray that builds up and fades instead of
+  popping.
+- [1.0.2](docs/history/CHANGES_v1.0.2.md): wet asphalt instead of a mirror (reflection energy follows the roughness,
+  glossy blur), street-lamp highlights on the wet road at night, the BeamNG.Earth bridge built in, an API for other
+  weather mods.
+- [1.0.1](docs/history/CHANGES_v1.0.1.md): the road flicker fixed, no lens drops or rain at start-up, calmer wet look,
+  and the first Midnight.
+- [1.0.0](docs/history/CHANGES_v1.0.0.md) and the 0.x versions: [docs/history](docs/history).
 
 ## Known issues
 
@@ -141,7 +137,8 @@ compiled old one.
 - Without Animated Wipers, a blade's pivot can be mistaken for its tip on some wiper meshes, so that blade clears the wrong part of the glass (seen on the ETK 800's driver-side blade).
 - Under a big rear wing the boot lid gets no beads: the wing counts as the car's roof line, which keeps drops off the interior seen through the glass.
 - Hydroplaning reads the water from the same puddle field as the shader, but it does not see the tyre wakes (the water a car ahead pushed aside) except for a car's own front-to-rear track. Tyres are recognised by part name; a modded tyre with an unusual name counts as an ordinary road tyre ('Tread depth').
-- The default reflection traces are the longest and thickest ones: on a slower graphics card lower 'Trace steps' (puddles and wet road) first. Measured on West Coast USA at night with XeSS: about 2.3 ms of GPU time for the whole mod.
+- The default reflection traces are the longest and thickest ones: on a slower graphics card lower 'Trace steps' (puddles and wet road) first. Measured with 1.0.0 on West Coast USA at night with XeSS: about 2.3 ms of GPU time for the whole mod; later versions were not measured again.
+- The puddles' slope limit reads the slope from the depth buffer a few pixels around each point: right at the edge of a kerb, a car or a building it can be a little off, so a puddle can stop a little short of where a slope begins.
 - The 'Surroundings' fallback only helps reflections that point steeply upward (the rest stays on screen). It costs about 0.3-0.4 ms per frame at Normal Dynamic Reflections quality and is off by default.
 - Roofs are sampled every 4 m within about 18 m of the camera: rain can fall a little past the edge of a roof, the dry ground under a bridge has soft edges, and far beyond that the nearest sample decides (a long tunnel stays dry ahead). Seen from far outside, the road inside a tunnel can still look glossy until you get closer.
 - With 'Follow the game's weather' on, the game's own particle rain falls as well as this mod's.
@@ -149,32 +146,35 @@ compiled old one.
 - BeamNG cars have no wiper motor, so without Animated Wipers the wiper speed comes from the mod's rain sensor and its 'Wiper speed' slider.
 - Very long droplet streaks are capped at extreme speeds to keep the cost bounded.
 
-## BeamNG.Earth companion
+## BeamNG.Earth
 
-[`companions/rainPuddles_earth`](companions/rainPuddles_earth) (zip: [`release/rainPuddles_earth.zip`](release/rainPuddles_earth.zip))
-lets Rain Puddles draw the rain on the BeamNG.Earth map, from that map's real weather. On every other map it does nothing.
-See its [README](companions/rainPuddles_earth/README.md).
+Since 1.0.2 the bridge to BeamNG.Earth is part of the mod (`lua/ge/extensions/rainPuddlesEarth.lua`): on the BeamNG.Earth
+map, that map's real weather (rain, temperature, wind, clouds, visibility, snow) drives the rain, the drop size, how fast
+the ground gets wet and dries, the puddles and the spray. On every other map it does nothing. The separate
+`rainPuddles_earth` companion of 1.0.0 is no longer needed: remove it if you have it.
 
 ## Repository layout
 
 | Path | What |
 |---|---|
-| `lua/ge/extensions/rainPuddles.lua` | main game-engine extension: settings, rain, wet ground, glass panes, wipers, shelter grid, shader constants |
+| `lua/ge/extensions/rainPuddles.lua` | main game-engine extension: settings, rain, wet ground, glass panes, wipers, shelter grid, lamps, Midnight, shader constants |
 | `lua/ge/extensions/rainPuddlesWet.lua` | optional native wet-road film (road material roughness; only in *Native PBR + SSR* mode) |
-| `lua/ge/extensions/rainPuddlesHydro.lua` | hydroplaning, game-engine side: puddle field, lanes and roofs for each car |
+| `lua/ge/extensions/rainPuddlesHydro.lua` | hydroplaning, game-engine side: puddle field, lanes, roofs and slopes for each car |
+| `lua/ge/extensions/rainPuddlesEarth.lua` | bridge to BeamNG.Earth's real weather (only active on that map) |
 | `lua/vehicle/extensions/rainPuddlesHydroVeh.lua` | hydroplaning, vehicle side: contact-patch nodes, water depth, lift and drag at the physics rate |
 | `lua/vehicle/extensions/` (other files) | wheel / windshield probe, the optional Animated Wipers bridge |
-| `shaders/common/postFx/rainPuddles21/` | compute shaders: puddles + wet ground, body droplets, glass, falling rain, spray, lens |
-| `ui/ui-vue/mods/RainPuddles/` | settings panel (Pause menu > Mods > Rain Puddles) |
+| `shaders/common/postFx/rainPuddles31/` | compute shaders: puddles + wet ground, body droplets, glass, falling rain, spray, lens, Midnight grade |
+| `ui/ui-vue/mods/RainPuddles/` | settings panel (Pause menu > Mods > ForeverWEATHER) |
 | `art/rainPuddles/` | puddle masks (and their raw fields for the physics), droplet atlas, wiper sweep texture |
-| `release/` | ready-to-install zips |
-| `docs/` | banner, screenshots, Linux / Vulkan notes, change logs of the 0.x versions |
+| `mod_info/FOREVERWEATHER/` | icon and description for the game's mod manager |
+| `release/` | the ready-to-install zip |
+| `docs/` | banner, screenshots, Linux / Vulkan notes, change logs |
 
 ## Animated Wipers
 
 The optional bridge to the "Animated Wipers" mod only reads the data that mod publishes (its wiper switch and blade
 positions) and uses its own wiper switch. Nothing of that mod is included in this repository or changed by it; without it
-installed, Rain Puddles runs its own rain-sensing wiper timeline.
+installed, ForeverWEATHER runs its own rain-sensing wiper timeline.
 
 ## About the AI
 

@@ -1,0 +1,40 @@
+# Rain Puddles & Droplets 1.0.0 (Alpha)
+
+The change list of the first public release, as it was in the README.
+
+- New: node-based hydroplaning, in each car's own physics (2000 Hz). Every tyre's tread nodes are put in ring order; the ones touching the road are followed as the wheel turns, and each finds the water under it: the road's water film plus the puddles from exactly the field the puddle shader draws, inside the lanes, never under a roof, only on hard ground. The tread drains what it can (tread depth by tyre type: slicks, semi-slicks, race, off-road, or the 'Tread depth' setting), and the water pressure in front of the patch (1/2 rho v^2 C_L, against the tyre's real inflation pressure) carries part of each node's load, so BeamNG's own tyre physics loses the grip there. The water the tyre pushes aside drags it back. Arcade / Simcade / Sim, 'Water strength', traffic too, and a debug view of the contact patches. Tested on the West Coast USA drag strip at 105 km/h through storm puddles.
+- Fixed: stutter in the rain. Auto mode used to rewrite the game's road materials for the wet look (59 materials on West Coast USA, each rewrite froze the game for about 0.2 s, up to once a second while the wetness changed, and near every tunnel or bridge). Auto now draws the wet road with the mod's own film (dry under roofs too); 'Native PBR + SSR' still uses the materials, a few per frame.
+- Fixed: the roads-only puddle mask searched the whole road network 1-4 times a second while driving (1.5-5 ms each time); it uses a spatial index now.
+- New: drops on the side windows (door and quarter glass) of your car, read from its own glass meshes, from the seat and from outside. They bead, run back with the airflow and run down when parked. Setting: 'Drops on the side windows too'.
+- New: tunnels, bridges and roofs. Upward checks around the camera find what is covered: the ground there stays dry (no wet film, puddles or reflections), the tyres throw no spray, no new rain lands on the glass, the rain sensor gives a couple more sweeps (two, three when driving fast) and parks the wipers, and the drops on the cars slowly go (about 2.5 minutes parked, about 10 seconds at highway speed). Back in the rain everything returns within seconds. Near a tunnel the mod draws the wet road itself instead of the game's wet road materials, which would also shine inside the tunnel.
+- Changed: the falling rain looks like water now. Each drop shows the scene behind it, bent like through a small lens (80 %), and a little of the sky (20 %), with its colours softened, so it never takes on a strong colour. Near drops are out of focus, the ends of each streak fade out, and there are less than half as many drops. At night the drops still catch the lights of the scene.
+- Changed: a much lighter tyre spray (thinner mist, at most 28 % opaque, default strength 0.3).
+- Changed defaults: the longest and thickest reflection traces (48 steps, 2 m) for puddles and the wet road, so more of what is under and behind the cars shows in the reflections; stochastic glossy reflections on by default when a temporal upscaler (XeSS, DLSS, FSR) or TAA is on; glassier puddles and a slightly darker wet road. Settings you changed yourself are kept.
+- Fixed: with Animated Wipers, right after its wipers were switched off the rain sensor could misread that mod's wiper switch as moved by hand and stop following the rain.
+- New: falling rain drawn on the graphics card. Streaks with real depth that lean with the wind and rush at you when driving, no rain under roofs, bridges or in tunnels or inside your car, visible at night too (lit by lamps and headlights). It replaces BeamNG's particle rain, which is now off by default (you can still switch it on).
+- New: 'Rain droplet size' (mm). The falling rain, the beads on the cars and the drops on the glass all scale with it, and the Quick looks set it. Drops are smaller by default.
+- New: every bead on the cars and the glass has its own outline (stretched, a little lumpy) instead of a perfect circle.
+- New: a measured wiper model per car. Each blade's pivot, reach and sweep and the part of the glass it wipes are measured in game for every car (nothing is stored per car): from where the Animated Wipers blades turn and how far, when that mod is installed, otherwise from the car's own wiper mesh. The glass clears exactly there, and the rain sensor picks the wiper speed by how much glass the blades clear per minute. Debug view 'Wiper model'; console: extensions.rainPuddles.getWiperModel().
+- New: rear wiper on cars that have one (its own intermittent timing, or Animated Wipers' rear blade).
+- New: optional 'Surroundings' reflection fallback. A small extra view of the scene above the camera, so puddle reflections that leave the top of the screen show trees, bridges and buildings instead of open sky. Its size follows the game's Dynamic Reflections quality.
+- New: Quick look presets (Damp, Wet, Storm, Flooded) that set the rain and the whole wet road in one click.
+- New: a more reflective wet road that still looks like asphalt: reflections build up toward grazing angles instead of turning the road into a mirror right in front of the car.
+- New: the sky clouds over automatically while it rains; the level's own clouds come back when it stops.
+- New: windshield rain follows the car's real glass. Its outline and curve are read from the car's own glass mesh (the jbeam windshield frame is the fallback), so rain stays off the dashboard, pillars, headliner, mirror and sunroof.
+- New: drops on the rear / hatch glass too (read from the car's tailgate / rear-window glass mesh).
+- New: windshield rain is also visible when you look at your car from outside, and the glass drops behave like the body drops: they bead, run down when parked, get blown up the glass at speed and streak, and braking or cornering moves them.
+- New: the glass clears where the car's own wipers sweep. Blade count, pivots, lengths and parked angles are read from each car's wiper mesh in game. No fake blades are drawn.
+- New: rain-sensing wipers. They start by themselves when rain lands on the glass and switch between intermittent, normal and fast with the rain and your speed; the glass clears at the speed in use. On a car with a wiper switch (e.g. the Midsize stalk) the switch follows.
+- New: works together with the "Animated Wipers" mod when it is installed (nothing of it is included or changed). The rain sensor uses that mod's own wiper switch, the glass clears exactly when and as far as its blades sweep, and if you switch them by hand Rain Puddles follows you.
+- Fixed: no more puddles, ripples or wet film inside a car (its floor, seats and dashboard, seen from the seat or through the glass).
+- Fixed: rain ripples only in puddles, smaller and more like real rain rings (no flat rings across the road).
+- Fixed: after resetting the car at speed, the lens drops and the glass drops kept streaking and slowed down over a second; they stop at once now.
+- Fixed: the glass cleared in real time even in slow motion or pause; the wipers and the clearing now follow the simulation speed.
+- Fixed: with Animated Wipers, the glass now clears exactly under its blades (the driver-side blade was read the wrong way round).
+- Fixed: puddles and droplets sliding along when the camera moves (the camera position was one frame old). With that, puddles and wet film no longer show on the front or back of a moving car.
+- Fixed: tyre spray behind a dark car looked like dark smoke; it is now a pale mist lit by the sky.
+- Fixed: grainy speckles in wet-road reflections (most visible in a car's own mirror image).
+- Fixed: with XeSS / DLSS / FSR upscaling, the windshield, tyre spray and puddle reflections read depth from the wrong spot.
+- Fixed: droplets inside the cabin (headrests, dashboard, parcel shelf seen through the glass), using each car's roof line.
+- Fixed: running droplets clipped at high speed (search window too small for long streaks).
+- 12 cars (was 6) are kept free of puddles; right-hand-drive cars get mirrored wipers; official in-car camera detection; "open settings" console command fixed.
