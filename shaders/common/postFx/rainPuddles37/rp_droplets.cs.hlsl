@@ -671,8 +671,9 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
             float thick = saturate(sh.z);
             float ndv = saturate(dot(nd, V));
             // 1.1 Fresnel of the water surface (Schlick, F0 0.02), scaled by 'Fresnel': the bead is clear where it faces
-            // the camera and turns into a mirror toward its rim
-            float fres = saturate(rpFresnel(0.02, ndv) * max(rpDropD.z, 0.0));
+            // the camera and turns into a mirror toward its rim. 1.2.1: that is only the base; see 'light catch' below.
+            const float fresPhys = rpFresnel(0.02, ndv);
+            const float fresBaseK = max(rpDropD.z, 0.0);
 
             // 1.1 refraction. A bead is a strong little lens: what is seen through it comes from several bead radii
             // away and upside down (a small, inverted image of what lies around it), most of all toward its rim. The
@@ -708,16 +709,39 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
             float3 Hk = normalize(keyDir + V);
             float glint = pow(saturate(dot(nd, Hk)), 420.0) * skyConf;
 
-            // what is seen through the bead: clear water (a faint blue-green), darker only in a thin rim
+            // 1.2.1 light catch (rpDropD.w): the rim mirrors more where what it mirrors is much brighter than the paint
+            // around the bead (the sky over a dark or shaded car, a street lamp at night), up to the water's own
+            // Fresnel at 1.0; where it mirrors something no brighter than the paint (light paint, the ground, the dark
+            // sky) the bead keeps the plain 'Fresnel' and stays clear. Ratios of the frame's own colours, so it works the
+            // same at any exposure. The extra mirror is colour-neutral: lamps brighten the rims, they do not tint them.
+            const float catchK = max(rpDropD.w, 0.0);
+            // brightness as the strongest channel: by luminance a saturated red or blue paint counts as dark although it
+            // is not (tested in game: by day every bead on a red hood caught the grey sky)
+            float lumEnv = max(env.r, max(env.g, env.b));
+            float lumPaint = max(max(col.r, max(col.g, col.b)), 1e-4);
+            // only light far above the paint counts (4x .. 8x): on a small bead a rim only a little brighter than the paint
+            // mixes with the bead's dark lens image into the paint's own brightness and the bead vanishes (tested in game:
+            // grey daylight sky over a red hood, 2-4x). Dark paint under the sky, lamps and lit streets at night are far
+            // brighter than that, so those beads catch the light; on mid and light paint by day they stay dark lenses.
+            float gateL = smoothstep(4.0, 8.0, lumEnv / lumPaint) * saturate(catchK * 4.0);
+            float fresTopK = max(catchK, fresBaseK);   // 1 = the water's own Fresnel where bright light is mirrored
+            float fresB = saturate(fresPhys * fresBaseK);
+            float fres = saturate(fresPhys * lerp(fresBaseK, fresTopK, gateL));
+            float3 envNeutral = lerp(rpLuma(env).xxx, env, 0.25);
+            float3 envMix = (env * fresB + envNeutral * max(fres - fresB, 0.0)) / max(fres, 1e-5);
+
+            // what is seen through the bead: clear water (a faint blue-green), darker only in a thin rim (1.2.1: a little
+            // darker with the light catch on: that thin dark edge is what outlines a real drop)
             float3 dcol = refr * lerp(float3(0.97, 0.985, 0.99), float3(0.92, 0.96, 1.0), smoothGlass * 0.4);
-            dcol *= 1.0 - 0.35 * darkRim;
+            dcol *= 1.0 - (0.35 + 0.12 * saturate(catchK)) * darkRim;
             dcol += refr * caustic;
             // the paint's own sky reflection does not show through the water...
             float fresFlat = rpFresnel(0.04, saturate(dot(N, V)));
             dcol = max(dcol - envN * (fresFlat * 0.4), 0.0);
             // ...the bead's curved surface reflects instead (Fresnel: clear in the middle, a mirror at the rim)
-            dcol = dcol * (1.0 - fres) + env * (fres * (0.95 + 0.3 * saturate(rpDropB.y)));
-            // a soft sky highlight on the side of the bead that faces the brightest sky, then the sharp glint
+            dcol = dcol * (1.0 - fres) + envMix * (fres * (0.95 + 0.3 * saturate(rpDropB.y)));
+            // a soft sky highlight on the side of the bead that faces the brightest sky, then the sharp glint (1.2.1: not
+            // raised by the light catch: a broader highlight washed out the bead's dark centre, tested in game)
             float soft = pow(saturate(dot(nd, Hk)), 40.0) * skyConf * saturate(thick * 2.0);
             dcol += keyCol * (glint * 5.0 + soft * 0.35);
             col = lerp(col, dcol, cover);

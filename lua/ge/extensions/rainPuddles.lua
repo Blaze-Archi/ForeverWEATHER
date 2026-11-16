@@ -26,7 +26,7 @@ local TAG = 'rainPuddles'
 -- shader file changed (measured: edited shaders kept running in their old form across restarts until that cache was
 -- cleared). A new path makes every player's game compile the 1.0 shaders instead of reusing cached 0.9 ones.
 -- Rename the folder again whenever the shaders change in a release.
-local shaderDir = 'shaders/common/postFx/rainPuddles31/'
+local shaderDir = 'shaders/common/postFx/rainPuddles37/'
 local maskDir = '/art/rainPuddles/'
 local wiperMaskPath = maskDir .. 'wiper_sweep.data.png'
 local settingsFile = '/settings/rainPuddles.json'
@@ -162,6 +162,9 @@ local defaults = {
   dropletMaxDistance = 40,
   dropletFresnel = 0.12,     -- 1.1: Fresnel of the beads: clear where they face you, a mirror toward the rim. 1.2: was 1.0,
                              -- which turned every bead's rim into a full mirror (beads looked like bubbles)
+  dropletLightCatch = 1.5,   -- 1.2.1: a bead's rim mirrors more where it mirrors something 4-8x brighter than the paint
+                             -- (sky over dark paint, lit streets and lamps at night): up to 1.5x the water's own Fresnel
+                             -- there; mid and light paint by day keep the plain 'Fresnel'. 0 = plain Fresnel everywhere
 
   -- Cockpit windshield / wipers
   windshieldDensity = 0.70,
@@ -280,6 +283,7 @@ local ranges = {
   dropletShell = { 0.1, 1.0 },
   dropletMaxDistance = { 5, 80 },
   dropletFresnel = { 0, 2 },
+  dropletLightCatch = { 0, 2 },
 
   windshieldDensity = { 0, 1.8 },
   windshieldSize = { 0.002, 0.03 },
@@ -336,7 +340,7 @@ local boxes = {}
 local accelState = {}   -- [vehicle id] = last velocity + low-passed acceleration
 local frameDtSim = 0
 local frameId, camFrame = 0, -1
-local VERSION = '1.2.0'
+local VERSION = '1.2.1'
 local MAX_VEH_PUDDLES = 12   -- vehicles kept off the puddle / wet-ground pass (must match rp_puddles.h.hlsl)
 local MAX_VEH_DROPS = 6      -- vehicles with body droplets (must match rp_droplets.h.hlsl)
 local PROFILE_N = 16         -- roof-line samples per vehicle (must match rp_droplets.cs.hlsl)
@@ -3505,7 +3509,8 @@ local function dropletConsts(fx)
   fx:setShaderConst('$rpDropB', fmt4(S.dropletShell, S.dropletSheen, S.dropletMaxDistance, rain))
   fx:setShaderConst('$rpDropC', fmt4(S.dropletSlide, S.dropletAero, 1.0, S.dropletInertia))
   -- 1.2: the street lamps no longer colour the beads (1.1's lamp sparkles and 1.1's city-glow rims are gone: too strong)
-  fx:setShaderConst('$rpDropD', fmt4(S.dropletRunners, S.dropletTrails, S.dropletFresnel or defaults.dropletFresnel, 0))
+  fx:setShaderConst('$rpDropD', fmt4(S.dropletRunners, S.dropletTrails, S.dropletFresnel or defaults.dropletFresnel,
+    S.dropletLightCatch or defaults.dropletLightCatch))   -- 1.2.1 w: light catch
 end
 
 -- camera lens droplets ---------------------------------------------------------------------

@@ -133,6 +133,7 @@ export const SLIDERS = {
     { k: "dropletSize", l: "Bead radius (m)", a: 0.004, b: 0.04, st: 0.001, d: 3, hint: "At 2.5 mm raindrops; scaled by 'Rain droplet size' (Falling rain section)." },
     { k: "dropletRefraction", l: "Refraction", a: -1.5, b: 2.5, st: 0.05, d: 2, hint: "How strongly each bead works as a lens: it shows a small, upside-down image of what lies around it." },
     { k: "dropletFresnel", l: "Fresnel (mirror rim)", a: 0, b: 2, st: 0.01, d: 2, hint: "How much of a mirror a bead's rim becomes (they stay clear where they face you). Low values keep the beads clear water; high values turn their rims into bright mirrors, like bubbles." },
+    { k: "dropletLightCatch", l: "Light catch", a: 0, b: 2, st: 0.05, d: 2, hint: "Where a bead mirrors something far brighter than the paint around it (the sky over a dark car, lit streets and lamps at night), its rim catches that light, so the drops show in the dark. Beads on mid and light paint by day stay clear lenses. It only brightens the rims, it never tints them. 0 = the plain Fresnel everywhere." },
     { k: "dropletSpeed", l: "Rain-hit / life rate", a: 0.1, b: 4, st: 0.05, d: 2 },
     { k: "dropletRunners", l: "Moving droplets", a: 0, b: 1, st: 0.01, d: 2, hint: "Drops that run backward with the airflow and down the panels with gravity." },
     { k: "dropletTrails", l: "Wet trails", a: 0, b: 1, st: 0.01, d: 2 },
