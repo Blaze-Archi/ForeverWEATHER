@@ -4,7 +4,7 @@
 
 Falling rain, wet roads, puddles with reflections, node-based hydroplaning, body droplets, rain on the windshield, rear and side windows with real wipers, lens drops, dry tunnels, tyre spray, and a night street-racer look.
 
-A graphics and physics mod for **BeamNG.drive 0.40.x** (version 1.2.1 **Alpha**). Everything is drawn by the mod's own compute
+A graphics and physics mod for **BeamNG.drive 0.40.x** (version 1.3.0 **Alpha**). Everything is drawn by the mod's own compute
 shaders and Lua; it needs no other mod.
 
 > **DX12 and Vulkan only.** DX11 doesn't support SSR on BeamNG.drive currently, and the mod utilizes SSR for the puddles.
@@ -20,8 +20,8 @@ shaders and Lua; it needs no other mod.
 ## What it does
 
 - Wet asphalt that darkens and turns glossy with the rain, plus puddles on roads with screen-space reflections, rain ripples and tyre wakes. Water only stands on level ground: no puddles on hills.
-- Droplets on every nearby car: round beads, teardrops and elongated running drops that bead, run off with gravity and stream backward with the airflow. Each one is a small lens: clear water that shows an upside-down view of what is around it, and its rim catches bright light (the sky over a dark car, lit streets and lamps at night), so the drops show in the dark too.
-- Rain on your car's windshield, rear / hatch glass and side windows, from the driver's seat and from outside, cleared by automatic rain-sensing wipers.
+- Droplets on every nearby car: round beads, teardrops and elongated running drops that bead, run off with gravity and stream backward with the airflow. Each one is a small lens: clear water that shows an upside-down view of what is around it, and its rim catches bright light (the sky over a dark car, lit streets and lamps at night), so the drops show in the dark too. At night the street lamps make tiny sparks on them.
+- Rain on your car's windshield, rear / hatch glass and side windows, from the driver's seat and from outside, cleared by automatic rain-sensing wipers. The drops on the glass are lenses like the ones on the paint, and at night the windshield glitters with the street lamps.
 - Drops on the camera lens all over the screen, blown toward the edges as you drive.
 - Node-based hydroplaning (Arcade / Simcade / Sim): the water under each tyre's contact-patch nodes (the road film and exactly the puddles you see) lifts them off the road against the tyre's own pressure and drags them back, so grip fades in deep water at speed and one wheel in a puddle pulls the car.
 - Tunnels, bridges and roofs: the ground under them stays dry and does not reflect, no rain lands on the glass there, the wipers finish a couple of sweeps and stop, and the drops on the cars slowly go (faster the faster you drive).
@@ -100,6 +100,26 @@ copy of it in `mods/unpacked/foreverweather/` also works for development. After 
 (`shaders/common/postFx/rainPuddlesNN`) and `shaderDir` in `lua/ge/extensions/rainPuddles.lua`, or the game keeps the
 compiled old one.
 
+## What's new in 1.3.0
+
+- **Glass drops like the body drops.** The drops on the windshield, rear and side windows use the same optics as the
+  beads on the paint: refraction (each drop shows a small, upside-down image of the world around it), Fresnel on the
+  same scale (default 0.12, it was 1.0) and Light catch. No more bubbles by day: the fixed white highlight, the milky
+  veil and the wide dark ring are gone. From the seat a drop has the thin dark outline of real water. New slider:
+  Glass drops: light catch.
+- **Light catch at night.** The 8 nearest street lamps make tiny, sharp sparks in the drops. From the seat the
+  windshield glitters under street lights, and the beads on the paint sparkle. Mostly white and about a pixel in size,
+  so the lamps never tint the beads.
+- **Puddles keep the angle.** 'Reflectivity' is the water's reflectance straight down, rising toward the horizon like
+  real water (at the default, the puddles right in front of you mirror 6 % instead of 15 %; far away nothing changes).
+- **Light streaks.** Street lamps on rough wet asphalt stretch into long streaks toward you (up to 5x at low angles);
+  deep puddles keep a sharp mirror image.
+- **Fixes.** No pass can write a broken (NaN) pixel any more, which the game's anti-aliasing could spread into black
+  flicker on cars and in the cabin; a softer in-car mask edge; the sky behind the windshield; the wipers after a vehicle
+  reset (with Animated Wipers); hydroplaning and lens-drop edge cases.
+
+Full notes: [docs/history/CHANGES_v1.3.0.md](docs/history/CHANGES_v1.3.0.md).
+
 ## What's new in 1.2.1
 
 - **Light catch** (Vehicle droplets, default 1.5). With 1.2.0's low Fresnel the beads were clear water but nearly
@@ -172,7 +192,7 @@ the ground gets wet and dries, the puddles and the spray. On every other map it 
 | `lua/ge/extensions/rainPuddlesEarth.lua` | bridge to BeamNG.Earth's real weather (only active on that map) |
 | `lua/vehicle/extensions/rainPuddlesHydroVeh.lua` | hydroplaning, vehicle side: contact-patch nodes, water depth, lift and drag at the physics rate |
 | `lua/vehicle/extensions/` (other files) | wheel / windshield probe, the optional Animated Wipers bridge |
-| `shaders/common/postFx/rainPuddles37/` | compute shaders: puddles + wet ground, body droplets, glass, falling rain, spray, lens, Midnight grade |
+| `shaders/common/postFx/rainPuddles39/` | compute shaders: puddles + wet ground, body droplets, glass, falling rain, spray, lens, Midnight grade |
 | `ui/ui-vue/mods/RainPuddles/` | settings panel (Pause menu > Mods > ForeverWEATHER) |
 | `art/rainPuddles/` | puddle masks (and their raw fields for the physics), droplet atlas, wiper sweep texture |
 | `mod_info/FOREVERWEATHER/` | icon and description for the game's mod manager |
