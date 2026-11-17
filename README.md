@@ -4,7 +4,7 @@
 
 Falling rain, wet roads, puddles with reflections, node-based hydroplaning, body droplets, rain on the windshield, rear and side windows with real wipers, lens drops, dry tunnels, tyre spray, and a night street-racer look.
 
-A graphics and physics mod for **BeamNG.drive 0.40.x** (version 1.3.0 **Alpha**). Everything is drawn by the mod's own compute
+A graphics and physics mod for **BeamNG.drive 0.40.x** (version 1.3.1 **Alpha**). Everything is drawn by the mod's own compute
 shaders and Lua; it needs no other mod.
 
 > **DX12 and Vulkan only.** DX11 doesn't support SSR on BeamNG.drive currently, and the mod utilizes SSR for the puddles.
@@ -27,7 +27,7 @@ shaders and Lua; it needs no other mod.
 - Tunnels, bridges and roofs: the ground under them stays dry and does not reflect, no rain lands on the glass there, the wipers finish a couple of sweeps and stop, and the drops on the cars slowly go (faster the faster you drive).
 - Works together with the "Animated Wipers" mod if you have it (optional; nothing of it is included or changed): the rain sensor uses that mod's own wiper switch, and the glass clears exactly as its blades move.
 - Its own falling rain, drawn on the graphics card instead of BeamNG's particle rain (which costs about 4 ms of CPU time per frame in heavy rain). Each drop refracts the scene behind it like a tiny lens.
-- Tyre spray and wakes in puddles.
+- Tyre spray and wakes in puddles. At night the spray takes the colour of the lights around it: red behind a car from its tail lights, orange under sodium street lamps.
 - **Midnight:** a night street-racer look with soaked streets, the street lamps' halos in the wet night air (each lamp in its own colour), a glow of the city on the overcast sky and a night film grade. A **Random mood** button picks a moody weather: blue hour drizzle, golden storm, grey downpour, dawn mist or Midnight.
 - The ground gets wet and dries over time. It can follow the game's own weather, and on the BeamNG.Earth map that map's real weather (the bridge is built in).
 
@@ -99,6 +99,17 @@ The repository root has the same layout as the zip (`art/`, `lua/`, `mod_info/`,
 copy of it in `mods/unpacked/foreverweather/` also works for development. After editing a shader, rename its folder
 (`shaders/common/postFx/rainPuddlesNN`) and `shaderDir` in `lua/ge/extensions/rainPuddles.lua`, or the game keeps the
 compiled old one.
+
+## What's new in 1.3.1
+
+- **Tyre spray at night.** The spray was a faint grey haze at night, or nothing at all. Now it is lit by the lights
+  around it, in their colour: street lamps, headlights and the car's own tail lights, so the spray behind a car glows red
+  at night and flares up when it brakes. By day nothing changes; in an unlit street it barely shows, as in reality.
+- **Windshield drops seen from outside.** In chase and showcase views the drops on the glass were too small to see.
+  They now show as distinct specks that catch the sky by day and the street lamps at night, at the glass's real wet
+  coverage. The windshield is also found from outside now, so a car you never sat in gets drops on its glass too.
+
+Full notes: [docs/history/CHANGES_v1.3.1.md](docs/history/CHANGES_v1.3.1.md).
 
 ## What's new in 1.3.0
 
@@ -192,7 +203,7 @@ the ground gets wet and dries, the puddles and the spray. On every other map it 
 | `lua/ge/extensions/rainPuddlesEarth.lua` | bridge to BeamNG.Earth's real weather (only active on that map) |
 | `lua/vehicle/extensions/rainPuddlesHydroVeh.lua` | hydroplaning, vehicle side: contact-patch nodes, water depth, lift and drag at the physics rate |
 | `lua/vehicle/extensions/` (other files) | wheel / windshield probe, the optional Animated Wipers bridge |
-| `shaders/common/postFx/rainPuddles39/` | compute shaders: puddles + wet ground, body droplets, glass, falling rain, spray, lens, Midnight grade |
+| `shaders/common/postFx/rainPuddles42/` | compute shaders: puddles + wet ground, body droplets, glass, falling rain, spray, lens, Midnight grade |
 | `ui/ui-vue/mods/RainPuddles/` | settings panel (Pause menu > Mods > ForeverWEATHER) |
 | `art/rainPuddles/` | puddle masks (and their raw fields for the physics), droplet atlas, wiper sweep texture |
 | `mod_info/FOREVERWEATHER/` | icon and description for the game's mod manager |
