@@ -214,18 +214,112 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
                         // a dark car is the dark body: the plume turned into dark smoke over a bright wet road.
                         float2 o = float2(0.0, 0.0);
                         float envL = 0.0;
+                        float3 roadC = float3(0.0, 0.0, 0.0);
                         if (rpProjectFast(prk, pra, prb, c0 + up * 0.05 - rpCam.xyz, o))
                         {
                             o = clamp(o, float2(-4096.0, -4096.0), float2(4096.0, 4096.0));   // 1.3: no int overflow
                             int2 q = p + int2(round(o));
                             // the road below and beside the tyre (well outside the body), brightest of three
-                            envL = max(rpLuma(colorTex.Load(int3(rpClampPix(q + int2(0, 14)), 0)).rgb),
-                                   max(rpLuma(colorTex.Load(int3(rpClampPix(q + int2(-48, 8)), 0)).rgb),
-                                       rpLuma(colorTex.Load(int3(rpClampPix(q + int2(48, 8)), 0)).rgb)));
+                            float3 t0 = colorTex.Load(int3(rpClampPix(q + int2(0, 14)), 0)).rgb;
+                            float3 t1 = colorTex.Load(int3(rpClampPix(q + int2(-48, 8)), 0)).rgb;
+                            float3 t2 = colorTex.Load(int3(rpClampPix(q + int2(48, 8)), 0)).rgb;
+                            float l0 = rpLuma(t0);
+                            float l1 = rpLuma(t1);
+                            float l2 = rpLuma(t2);
+                            envL = max(l0, max(l1, l2));
+                            // 1.3 (night): the middle one, in colour: a lane marking, the body or a light in one tap
+                            // does not count
+                            float lm = l0 + l1 + l2 - envL - min(l0, min(l1, l2));
+                            roadC = (abs(l0 - lm) < 1e-6) ? t0 : ((abs(l1 - lm) < 1e-6) ? t1 : t2);
                         }
                         float3 amb = rpSprayAmbient();
                         float mistL = max(max(rpLuma(amb) * 1.15, envL * 0.9), max(rpLuma(src.rgb) * 0.9, 0.06));
                         float3 mist = float3(0.82, 0.87, 0.93) * mistL;
+                        // 1.3 night: the mist is lit by whatever lights the road under it, in that light's colour
+                        // (street lamps, the car's own tail and brake lights, headlights): wet asphalt returns about a
+                        // fifth of the light falling on it, a cloud of water drops nearly all of it. And it glows around
+                        // bright lights right next to the plume (it scatters their light forward, toward the eye). By
+                        // day the sky outshines all that and the mist stays as it was. (Up to 1.3.0 the night mist was
+                        // the road's grey brightness with a fixed floor: a faint grey haze, never in the lights' colour.)
+                        const float night = saturate(rpSplashD.x);
+                        if (night > 0.01)
+                        {
+                            float3 mistN = amb * 1.15;
+                            float3 roadN = roadC * 4.5;
+                            if (rpLuma(roadN) > rpLuma(mistN))
+                            {
+                                mistN = roadN;
+                            }
+                            float3 srcN = src.rgb * 0.9;
+                            if (rpLuma(srcN) > rpLuma(mistN))
+                            {
+                                mistN = srcN;
+                            }
+                            // The car's own tail lights: a rear tyre's plume starts right under them. Their colour is read
+                            // on screen where they should be (about 0.75 m up and 0.45 m behind the tyre; brightest of a
+                            // 3 x 3 patch, lights are thin), and they light the mist near them, fading over about a metre.
+                            // Brake lights read brighter, so the spray flares up red when the car brakes. For a front
+                            // tyre that spot is the car's side: dark at night, nothing added.
+                            const float3 tailP = c0 + up * 0.75 + back * 0.45;
+                            float2 ot = float2(0.0, 0.0);
+                            float2 os = float2(0.0, 0.0);
+                            float3 tailC = float3(0.0, 0.0, 0.0);
+                            if (rpProjectFast(prk, pra, prb, tailP - rpCam.xyz, ot)
+                                && rpProjectFast(prk, pra, prb, tailP + side * 0.3 - rpCam.xyz, os))
+                            {
+                                ot = clamp(ot, float2(-4096.0, -4096.0), float2(4096.0, 4096.0));
+                                float sp = clamp(length(os - ot) * 0.5, 2.0, 12.0);
+                                float bestT = 0.0;
+                                [unroll]
+                                for (int ty = -1; ty <= 1; ty++)
+                                {
+                                    [unroll]
+                                    for (int tx = -1; tx <= 1; tx++)
+                                    {
+                                        int2 qt = p + int2(round(ot + float2(float(tx), float(ty)) * sp));
+                                        float3 ct = colorTex.Load(int3(rpClampPix(qt), 0)).rgb;
+                                        float lt = rpLuma(ct);
+                                        if (lt > bestT)
+                                        {
+                                            bestT = lt;
+                                            tailC = ct;
+                                        }
+                                    }
+                                }
+                            }
+                            const float3 Xw = rpCam.xyz + rd * max(tcb, 0.05);
+                            const float3 dT = Xw - tailP;
+                            mistN += tailC * (0.6 * exp(-dot(dT, dT) / 0.8));
+                            // the brightest light within ~2-5 % of the screen height around this pixel (8 taps), and
+                            // the frame's average brightness (8 fixed taps) for the cap below
+                            float3 glowC = float3(0.0, 0.0, 0.0);
+                            float bestG = 0.0;
+                            float rs = dispatchRect.w / 1080.0;
+                            float frameL = 0.0;
+                            [unroll]
+                            for (int gi = 0; gi < 8; gi++)
+                            {
+                                float ang = float(gi) * 0.7853982 + (((gi & 1) == 1) ? 0.3927 : 0.0);
+                                float rr = (((gi & 1) == 1) ? 52.0 : 22.0) * rs;
+                                int2 qg = p + int2(round(float2(cos(ang), sin(ang)) * rr));
+                                float3 cg = colorTex.Load(int3(rpClampPix(qg), 0)).rgb;
+                                float lg = rpLuma(cg);
+                                if (lg > bestG)
+                                {
+                                    bestG = lg;
+                                    glowC = cg;
+                                }
+                                float2 fu = float2((float(gi & 3) + 0.5) / 4.0, (float(gi >> 2) + 0.5) / 2.0);
+                                frameL += rpLuma(colorTex.Load(int3(rpClampPix(int2(dispatchRect.xy + fu * dispatchRect.zw)), 0)).rgb);
+                            }
+                            frameL /= 8.0;
+                            mistN += glowC * 0.35;
+                            // water scatters all colours alike: a little toward white; and never a blown-out halo
+                            mistN = lerp(mistN, rpLuma(mistN).xxx, 0.2);
+                            mistN *= min(1.0, (14.0 * frameL + 1e-4) / max(rpLuma(mistN), 1e-6));
+                            mist = lerp(mist, mistN, night);
+                            mistL = lerp(mistL, rpLuma(mistN), night);
+                        }
                         // 1.0: a light mist (in-game feedback, twice: too thick): thin and never more than 28 % opaque
                         // 1.1: the water is already in each puff's weight (dens), the tyre's part scales it
                         float alpha = saturate((1.0 - exp(-dens * 0.5)) * tyreK);

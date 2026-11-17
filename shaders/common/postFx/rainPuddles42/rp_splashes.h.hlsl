@@ -18,6 +18,7 @@ cbuffer perDraw : register(b0)
     uniform float4 rpSplashA;  // x intensity, y size, z speed threshold (m/s), w ground wetness
     uniform float4 rpSplashB;  // x puddle coverage, y softness, z tile, w only-on-puddles (0 = any wet road)
     uniform float4 rpSplashC;  // x puddle water level, y max distance, z puddle size, w current rain
+    uniform float4 rpSplashD;  // 1.3 x night (0 by day .. 1 at night), from the time of day
 
     // 0.9: up to 8 tyres (player first, then traffic). A = contact point (world) + half tread width,
     // B = travel direction xy + ground speed + tread speed (spin), C = radius, active, spray clock, seed.

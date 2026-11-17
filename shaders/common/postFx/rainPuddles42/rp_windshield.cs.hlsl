@@ -123,6 +123,19 @@ float rpWindFrameLuma()
     return s / 8.0;
 }
 
+// 1.3: strength of a drop drawn at radV although it is only rawRad big. From the seat it fades (no sparkle from
+// sub-pixel drops). From outside only every (radV / rawRad)^2-th drop is drawn, at full strength: the glass keeps its
+// real wet coverage as distinct specks a viewer can see (enlarging them all made the glass one pale haze).
+float rpWindDropAlpha(float rawRad, float radV, uint h, bool outside)
+{
+    float k = saturate(rawRad / max(radV, 1e-6));
+    if (!outside)
+    {
+        return k;
+    }
+    return step(rpRand(rpPcg(h ^ 0x051ED27Fu)), k * k);
+}
+
 bool rpAtlasValid()
 {
     float4 m = dropTexTex.SampleLevel(dropTex_sampler_, RP_ATLAS_CAL_UV, 0.0);
@@ -408,6 +421,9 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     const float angPix = max(length(normalize(INx.wsEyeRay) - rd), 1e-6);
     const float pxIso = t * angPix / halfH;                                   // glass units per pixel, facing the eye
     const float mppU = pxIso / sqrt(max(abs(denom), 0.2));                    // ... averaged over the slant of the glass
+    // 1.3: from outside (chase and showcase views) a drop is drawn at least 2 px wide (see rpWindDropAlpha): at a few
+    // metres real drops are a pixel or less and vanished, although wet glass reads clearly speckled
+    const float minPx = outside ? 2.0 : 1.2;
     const float3 scrX = normalize(INx.wsEyeRay - ray0);                       // world direction of +x on screen
     const float3 scrY = normalize(INy.wsEyeRay - ray0);                       // world direction of +y (down) on screen
 
@@ -567,7 +583,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
                 float r3 = rpRand(rpPcg(hs ^ 0xE6546B64u));
                 float2 cen = (float2(c) + 0.15 + 0.70 * float2(r2, r3)) * cs;
                 float2 dq0 = pc - cen;
-                float reachR = max(r0 * 2.6, 1.3 * mppU);   // biggest bead (1.85 r0) plus its creep
+                float reachR = max(r0 * 2.6, (minPx + 0.1) * mppU);   // biggest bead (1.85 r0) plus its creep
                 if (dot(dq0, dq0) < reachR * reachR)
                 {
                     // when did a blade last pass this bead -> which generation of drops lives there now
@@ -595,8 +611,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
                     float adh = rpWindAdhesion(rawRad, r0);
                     float mob = saturate((Fmag - adh) / (adh * 1.5)); // 1 = torn off by the force
                     float present = saturate((density * (1.0 - 0.9 * mob) - r1) / 0.06);
-                    float radV = max(rawRad, 1.2 * mppU);
-                    float a = grow * present * saturate(rawRad / radV);
+                    float radV = max(rawRad, minPx * mppU);
+                    float a = grow * present * rpWindDropAlpha(rawRad, radV, hg, outside);
                     if (a > 0.001)
                     {
                         float2 cc = cen + fdir * (rawRad * 0.35 * saturate(Fmag / adh) * saturate(since * 0.5));
@@ -640,7 +656,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
             float stretchMax = (layerS == 0) ? 4.0 : 2.5;
             float stretchS = 1.0 + stretchMax * (1.0 - exp(-vmag * kS * 3.0 / stretchMax));
             // every cell whose drop can reach this pixel: head, teardrop tail and wet trail (bounded cost)
-            float radMax = max(rS * 1.6, 1.2 * mppU);
+            float radMax = max(rS * 1.6, minPx * mppU);
             float tailLen = max(2.46 * radMax * stretchS, rS * 1.6 * (2.0 + 4.0 * (stretchS - 1.0)));
             float headLen = 1.11 * radMax * stretchS;
             float2 gS = (pc - shift) / csS;
@@ -679,8 +695,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
                     float want = density * runAmt * lerp(0.25, 1.0, smoothstep(0.0, 0.4, mob));
                     float presence = saturate((want - r1) / 0.06);
                     float lifeW = smoothstep(0.0, 0.10, ph) * (1.0 - smoothstep(0.80, 1.0, ph));
-                    float radV = max(rawRad, 1.2 * mppU);
-                    float a = presence * lifeW * saturate(rawRad / radV);
+                    float radV = max(rawRad, minPx * mppU);
+                    float a = presence * lifeW * rpWindDropAlpha(rawRad, radV, hc, outside);
                     if (a > 0.001)
                     {
                         float2 cen = (float2(c) + 0.15 + 0.70 * float2(r2, r4)) * csS + shift;
@@ -883,7 +899,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
             // (the cabin behind the glass is always dark: a floor under it, and the rim never mirrors more than water)
             float lumBack = max(max(col.r, max(col.g, col.b)), 0.05);
             float gateL = smoothstep(4.0, 8.0, lumEnv / lumBack) * saturate(catchK * 4.0);
-            float fresTopK = max(min(catchK, 1.0), fresBaseK);
+            float fresTopK = max(outside ? catchK : min(catchK, 1.0), fresBaseK);
             float fresB = saturate(fresPhys * fresBaseK);
             float fres = saturate(fresPhys * lerp(fresBaseK, fresTopK, gateL));
             float3 envNeutral = lerp(rpLuma(env).xxx, env, 0.25);

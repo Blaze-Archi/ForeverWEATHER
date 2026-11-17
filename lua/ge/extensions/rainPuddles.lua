@@ -26,7 +26,7 @@ local TAG = 'rainPuddles'
 -- shader file changed (measured: edited shaders kept running in their old form across restarts until that cache was
 -- cleared). A new path makes every player's game compile the 1.0 shaders instead of reusing cached 0.9 ones.
 -- Rename the folder again whenever the shaders change in a release.
-local shaderDir = 'shaders/common/postFx/rainPuddles39/'
+local shaderDir = 'shaders/common/postFx/rainPuddles42/'
 local maskDir = '/art/rainPuddles/'
 local wiperMaskPath = maskDir .. 'wiper_sweep.data.png'
 local settingsFile = '/settings/rainPuddles.json'
@@ -342,7 +342,7 @@ local boxes = {}
 local accelState = {}   -- [vehicle id] = last velocity + low-passed acceleration
 local frameDtSim = 0
 local frameId, camFrame = 0, -1
-local VERSION = '1.3.0'
+local VERSION = '1.3.1'
 local MAX_VEH_PUDDLES = 12   -- vehicles kept off the puddle / wet-ground pass (must match rp_puddles.h.hlsl)
 local MAX_VEH_DROPS = 6      -- vehicles with body droplets (must match rp_droplets.h.hlsl)
 local PROFILE_N = 16         -- roof-line samples per vehicle (must match rp_droplets.cs.hlsl)
@@ -1141,7 +1141,8 @@ local probeAsk = {}       -- [vehicle id] = { at = time of the last request, tri
 -- 1.0: a probe is good once it found this many points on the glass; weaker results are kept but probed again.
 local PROBE_GOOD_HITS = 24
 
-local function requestWindshieldProbe(b, frameOnly)
+-- eye (1.3, optional): the eye position relative to the car, used instead of the camera's (probing from outside)
+local function requestWindshieldProbe(b, frameOnly, eye)
   local vid = b.id
   local have = windProbe[vid]
   if have and (have.final or have.frame or (have.ok and (have.hits or 0) >= PROBE_GOOD_HITS)) then return end
@@ -1157,9 +1158,11 @@ local function requestWindshieldProbe(b, frameOnly)
     return
   end
   st.at, st.tries = T, st.tries + 1
+  local ex, ey, ez = cam.x - b.px, cam.y - b.py, cam.z - b.pz
+  if eye then ex, ey, ez = eye[1], eye[2], eye[3] end
   local cmd = string.format(
     "if not rainPuddlesProbe then extensions.load('rainPuddlesProbe') end if rainPuddlesProbe then rainPuddlesProbe.run(%.4f,%.4f,%.4f,%d,%d) end",
-    cam.x - b.px, cam.y - b.py, cam.z - b.pz, vid, frameOnly and 1 or 0)
+    ex, ey, ez, vid, frameOnly and 1 or 0)
   local ok = pcall(function() b.veh:queueLuaCommand(cmd) end)
   if not ok then windProbe[vid] = { ok = false, final = true, note = 'queueLuaCommand not available' } end
 end
@@ -2005,6 +2008,18 @@ local function buildWindshield()
     if T - (cam.cockpitSince or -1e9) > 1.0 and (b.speed or 0) < 4.0 then requestWindshieldProbe(b) end
   else
     requestWindshieldProbe(b, true)                            -- the jbeam frame does not need the driver's eye
+    -- 1.3: a car without a jbeam windshield frame was only probed from the driver's seat, so a player who never sat in it
+    -- (chase cameras) never saw drops on its windshield from outside. Its driver camera's node stands in for the eye
+    -- (a little off the real eye does not matter: the rays still hit the glass from inside), while the car is still.
+    local have = windProbe[b.id]
+    if have and not have.frame and not have.final and (b.speed or 0) < 4.0 and core_camera
+       and type(core_camera.getDriverDataById) == 'function' then
+      local okN, nid = pcall(core_camera.getDriverDataById, b.id)
+      if okN and nid then
+        local okP, np = pcall(function() return b.veh:getNodePosition(nid) end)
+        if okP and np then requestWindshieldProbe(b, false, { np.x, np.y, np.z }) end
+      end
+    end
   end
   -- right-hand drive (game data): the wipers are mirrored
   local rhd = false
@@ -3770,6 +3785,8 @@ local function splashConsts(fx)
   fx:setShaderConst('$rpSplashA', fmt4(S.splashIntensity, S.splashSize, S.splashSpeedMin, groundWetness()))
   fx:setShaderConst('$rpSplashB', fmt4(cov, S.puddleSoftness, S.tileSize, S.splashPuddle))
   fx:setShaderConst('$rpSplashC', fmt4(water, S.maxDistance, size, clamp(S.rain, 0, 1)))
+  -- 1.3: at night the spray is lit by the lights around it (street lamps, tail lights), by day by the sky
+  fx:setShaderConst('$rpSplashD', fmt4(GLINT.nightFactor(), 0, 0, 0))
   setTyreConsts(fx)
 end
 
