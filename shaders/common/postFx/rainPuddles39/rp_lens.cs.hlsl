@@ -90,7 +90,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     [unroll]
     for (int k = 0; k < 12; k++)
     {
-        const float sc = exp(-max(dF[k], 0.0));     // landing space = screen x exp(-flow since the epoch began)
+        const float sc = exp(-clamp(dF[k], 0.0, 40.0));   // 1.3: bounded (exp underflow -> inf centres) | landing space = screen x exp(-flow since the epoch began)
         const float2 xl = sp * sc;
         const int ep = ep0 - k;
         [unroll]
@@ -183,5 +183,5 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
         }
     }
 
-    pfxOut[storePos] = float4(col, src.a);
+    pfxOut[storePos] = float4(rpSafe(col, src.rgb), src.a);
 }

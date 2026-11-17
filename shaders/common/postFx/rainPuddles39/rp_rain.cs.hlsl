@@ -159,7 +159,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     PFXVertToPix INy = processPostFxCompute(dispatchThreadID + uint3(0, 1, 0));
     const float3 ray0 = IN.wsEyeRay;
     const float3 rd = normalize(ray0);
-    float3 camFwd = normalize(cross(INx.wsEyeRay - ray0, INy.wsEyeRay - ray0));
+    float3 camFwd = cross(INx.wsEyeRay - ray0, INy.wsEyeRay - ray0);
+    camFwd /= max(length(camFwd), 1e-12);                   // 1.3: no normalize(0)
     camFwd = (dot(camFwd, ray0) < 0.0) ? -camFwd : camFwd;
     const float pixAng = max(length(normalize(INx.wsEyeRay) - rd), 1e-6);   // radians per pixel
 
@@ -177,8 +178,10 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     float4 accO = float4(0.0, 0.0, 0.0, 0.0);
     const float3 dRx = INx.wsEyeRay - ray0;                 // eye ray change per pixel (linear across the screen)
     const float3 dRy = INy.wsEyeRay - ray0;
-    const float3 ex = normalize(dRx - rd * dot(dRx, rd));
-    const float3 ey = normalize(dRy - rd * dot(dRy, rd));
+    const float3 ex0 = dRx - rd * dot(dRx, rd);
+    const float3 ey0 = dRy - rd * dot(dRy, rd);
+    const float3 ex = ex0 / max(length(ex0), 1e-12);
+    const float3 ey = ey0 / max(length(ey0), 1e-12);
     const float dropR = rpRainA.z * 0.5;
     const float maxD = rpRainA.w;
     // night: the tone mapping crushes small differences in the dark, so the drops are covered a little more
@@ -242,5 +245,5 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
         col *= max(rpMode.w, 0.05);
     }
 
-    pfxOut[storePos] = float4(col, src.a);
+    pfxOut[storePos] = float4(rpSafe(col, src.rgb), src.a);
 }

@@ -26,7 +26,7 @@ local TAG = 'rainPuddles'
 -- shader file changed (measured: edited shaders kept running in their old form across restarts until that cache was
 -- cleared). A new path makes every player's game compile the 1.0 shaders instead of reusing cached 0.9 ones.
 -- Rename the folder again whenever the shaders change in a release.
-local shaderDir = 'shaders/common/postFx/rainPuddles37/'
+local shaderDir = 'shaders/common/postFx/rainPuddles39/'
 local maskDir = '/art/rainPuddles/'
 local wiperMaskPath = maskDir .. 'wiper_sweep.data.png'
 local settingsFile = '/settings/rainPuddles.json'
@@ -63,7 +63,7 @@ local PRECIP_HEAVY = 'RainPuddles_NativeRain'
 local PRECIP_FINE  = 'RainPuddles_NativeSpray'
 
 local defaults = {
-  settingsVersion = 26,
+  settingsVersion = 27,
   enabled = true,
   wetGround = true,          -- 0.7: global wet ground on/off, independent of the puddles
   puddles = true,
@@ -169,8 +169,9 @@ local defaults = {
   -- Cockpit windshield / wipers
   windshieldDensity = 0.70,
   windshieldSize = 0.005,    -- 1.0: was 0.012 (3 cm drops on the glass)
-  glassRefraction = 1.0,     -- 1.2: the glass drops' own lens strength (they used the body drops' 'Refraction' before)
-  glassFresnel = 1.0,        -- 1.2: the glass drops' mirror rim (1 = the look so far)
+  glassRefraction = 1.75,    -- 1.2: the glass drops' own lens strength. 1.3: the body drops' optics 1:1, same default
+  glassFresnel = 0.12,       -- 1.2: the glass drops' mirror rim. 1.3: same meaning and default as the beads' (was 1.0)
+  glassLightCatch = 1.5,     -- 1.3: the glass drops' light catch (rim + the lamps' sparks at night), as the beads'
   wiperAuto = true,          -- 1.0: rain-sensing (intermittent / normal / fast from the rain on the glass)
   windshieldOutside = true,  -- 1.0: the player's windshield rain also shows when looking at the car from outside
   rearGlass = true,          -- 1.0: drops on the rear / hatch glass of the player's car (from its glass mesh)
@@ -289,6 +290,7 @@ local ranges = {
   windshieldSize = { 0.002, 0.03 },
   glassRefraction = { -1.5, 2.5 },
   glassFresnel = { 0, 2 },
+  glassLightCatch = { 0, 2 },
   boxLag = { 0, 3 },
   wiperSpeed = { 0.1, 3.0 },
   wiperTrail = { 0, 1 },
@@ -340,7 +342,7 @@ local boxes = {}
 local accelState = {}   -- [vehicle id] = last velocity + low-passed acceleration
 local frameDtSim = 0
 local frameId, camFrame = 0, -1
-local VERSION = '1.2.1'
+local VERSION = '1.3.0'
 local MAX_VEH_PUDDLES = 12   -- vehicles kept off the puddle / wet-ground pass (must match rp_puddles.h.hlsl)
 local MAX_VEH_DROPS = 6      -- vehicles with body droplets (must match rp_droplets.h.hlsl)
 local PROFILE_N = 16         -- roof-line samples per vehicle (must match rp_droplets.cs.hlsl)
@@ -400,11 +402,22 @@ local function copyTable(t)
   return r
 end
 
+-- 1.3: a NaN or infinite value never reaches a shader (string.format writes 'nan' / 'inf', and one such constant can
+-- turn a whole pass black for that frame); x * 0 ~= 0 is true exactly for NaN and +-inf
 local function fmt3(a, b, c)
+  a, b, c = tonumber(a) or 0, tonumber(b) or 0, tonumber(c) or 0
+  if a * 0 ~= 0 then a = 0 end
+  if b * 0 ~= 0 then b = 0 end
+  if c * 0 ~= 0 then c = 0 end
   return string.format('%.6f %.6f %.6f', a, b, c)
 end
 
 local function fmt4(a, b, c, d)
+  a, b, c, d = tonumber(a) or 0, tonumber(b) or 0, tonumber(c) or 0, tonumber(d) or 0
+  if a * 0 ~= 0 then a = 0 end
+  if b * 0 ~= 0 then b = 0 end
+  if c * 0 ~= 0 then c = 0 end
+  if d * 0 ~= 0 then d = 0 end
   return string.format('%.6f %.6f %.6f %.6f', a, b, c, d)
 end
 
@@ -634,6 +647,15 @@ local function loadSettings()
       if rf == nil or math.abs(rf - 1.0) < 1e-6 or rf >= 1.5 - 1e-6 then S.dropletRefraction = defaults.dropletRefraction end
       if cc == nil or math.abs(cc - 0.22) < 1e-6 then S.lensClearCenter = defaults.lensClearCenter end
       if tonumber(data.glassRefraction) == nil and rf ~= nil then S.glassRefraction = clamp(rf, -1.5, 2.5) end
+    end
+    if (tonumber(data.settingsVersion) or 0) < 27 then
+      -- 1.3: the windshield drops use the body drops' optics 1:1 (refraction, Fresnel, light catch). Their old defaults
+      -- (Fresnel 1.0, which made them bubbles, and refraction 1.0) move to the beads' defaults; values the player picked
+      -- stay. Light catch for the glass is new (default as the beads').
+      -- (the refraction as loaded or as the v26 step above derived it from the beads' value)
+      local gf, gr = tonumber(data.glassFresnel), tonumber(S.glassRefraction)
+      if gf == nil or math.abs(gf - 1.0) < 1e-6 then S.glassFresnel = defaults.glassFresnel end
+      if gr == nil or math.abs(gr - 1.0) < 1e-6 then S.glassRefraction = defaults.glassRefraction end
     end
     S.settingsVersion = defaults.settingsVersion
 
@@ -3382,7 +3404,7 @@ function GLINT.update(dt)
     GLINT.off()
   end
   local road = S.wetGround and (S.lampHighlights or 0) > 0.001
-  local drops = S.droplets and S.rain > 0.001
+  local drops = (S.droplets or S.windshield) and S.rain > 0.001   -- 1.3: the beads' and the glass drops' sparks
   local halos = S.midnight and (S.midnightHalos or 0) > 0.001 and (S.midnightGrade or 0) > 0.001
   if not (S.enabled and (road or drops or halos) and lvl and rainSt.live()) then
     GLINT.off()
@@ -3411,7 +3433,7 @@ function GLINT.update(dt)
     local t = GLINT.info(near[i][1])
     if t and t.on and t.r + t.g + t.b > 0.01 then
       local lum = 0.2126 * t.r + 0.7152 * t.g + 0.0722 * t.b
-      local w = clamp(math.sqrt(lum / 0.3), 0.5, 2.0)
+      local w = clamp(math.sqrt(math.max(lum, 0) / 0.3), 0.5, 2.0)
       pick[#pick + 1] = { near[i][1], t, near[i][2] / (w * w), lum }
     end
   end
@@ -3447,8 +3469,9 @@ function GLINT.update(dt)
   GLINT.kAll = string.format('1 %d 0 %.3f', n, GLINT.night)
 end
 
-function GLINT.setConsts(fx, k)
-  for i = 1, GLINT.N do
+-- nMax (1.3): the drop passes declare only the 8 nearest lamps
+function GLINT.setConsts(fx, k, nMax)
+  for i = 1, nMax or GLINT.N do
     if i <= GLINT.used then
       fx:setShaderConst(GLINT.nA[i], GLINT.strA[i])
       fx:setShaderConst(GLINT.nB[i], GLINT.strB[i])
@@ -3511,6 +3534,9 @@ local function dropletConsts(fx)
   -- 1.2: the street lamps no longer colour the beads (1.1's lamp sparkles and 1.1's city-glow rims are gone: too strong)
   fx:setShaderConst('$rpDropD', fmt4(S.dropletRunners, S.dropletTrails, S.dropletFresnel or defaults.dropletFresnel,
     S.dropletLightCatch or defaults.dropletLightCatch))   -- 1.2.1 w: light catch
+  -- 1.3 light catch at night: the 8 nearest lamps spark on the beads (rpLightK: catch, count, mean intensity, night)
+  GLINT.setConsts(fx, fmt4(S.dropletLightCatch or defaults.dropletLightCatch, math.min(GLINT.used, 8), GLINT.meanI,
+    GLINT.night), 8)
 end
 
 -- camera lens droplets ---------------------------------------------------------------------
@@ -3671,7 +3697,11 @@ local function glassConsts(fx, W, flow, wip)
   fx:setShaderConst('$rpWindD', fmt4(ux, uy, uz, S.windshieldSize * dropScale()))
   fx:setShaderConst('$rpWindE', fmt4(tc, sweepT, period, flags))
   -- 1.2: y = the glass drops' Fresnel (mirror rim), w = their own refraction (the body drops' 'Refraction' before)
-  fx:setShaderConst('$rpWindF', fmt4(S.wiperTrail, S.glassFresnel or 1, rain, S.glassRefraction or 1))
+  fx:setShaderConst('$rpWindF', fmt4(S.wiperTrail, S.glassFresnel or defaults.glassFresnel, rain,
+    S.glassRefraction or defaults.glassRefraction))
+  -- 1.3 light catch of the glass drops; at night the 8 nearest lamps spark in them (rpLightK as the beads')
+  GLINT.setConsts(fx, fmt4(S.glassLightCatch or defaults.glassLightCatch, math.min(GLINT.used, 8), GLINT.meanI,
+    GLINT.night), 8)
   fx:setShaderConst('$rpWindG', fmt4(flow.speed, active, cam.aspect, outside and 1 or 0))
   fx:setShaderConst('$rpWindH', fmt4(WIPER.park, WIPER.range, flow.clock, flow.rateHold or flow.rate))
   -- z: 0 estimated plane, 1 ray probe, 2 real outline (jbeam frame or the glass mesh) in rpWindJ / K / P (1.0)

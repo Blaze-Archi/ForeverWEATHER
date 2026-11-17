@@ -144,7 +144,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 
     // ---- 3. contrast and colour --------------------------------------------------------------------------------------
     L = max(rpLuma(x), 1e-6);
-    const float c = 1.0 + rpGradeB.z * k;
+    const float c = max(1.0 + rpGradeB.z * k, 0.2);      // 1.3: never 0 or negative (pow -> inf)
     const float Lc = aL * pow(L / aL, c);
     x *= Lc / L;
     L = Lc;
@@ -158,10 +158,10 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     x = max(lerp(L.xxx, x, s), 0.0);
 
     // ---- 4. blue night shadows and vignette -----------------------------------------------------------------------
-    x += aL * rpGradeC.x * saturate(k) * (1.0 - t) * rpGradeE.rgb;
+    x += aL * rpGradeC.x * saturate(k) * (1.0 - t) * max(rpGradeE.rgb, 0.0);
     const float2 vc = (uv - 0.5) * float2(dispatchRect.z / max(dispatchRect.w, 1.0), 1.0);
     const float vr = dot(vc, vc) / (0.25 * (1.0 + (dispatchRect.z * dispatchRect.z) / max(dispatchRect.w * dispatchRect.w, 1.0)));
     x *= 1.0 - saturate(rpGradeA.z) * saturate(k) * 0.55 * smoothstep(0.25, 1.0, vr);
 
-    pfxOut[storePos] = float4(x, src.a);
+    pfxOut[storePos] = float4(rpSafe(x, src.rgb), src.a);
 }

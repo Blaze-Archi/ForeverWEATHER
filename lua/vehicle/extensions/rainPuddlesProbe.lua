@@ -293,7 +293,9 @@ local function frameWindshield(fwd, right, up)
       for r = 1, 4 do curv[r] = R4[r] / M4[r][r] end
       -- sanity: a windshield never bends more than ~25 cm over its half width
       local edge = math.abs(curv[3] + math.abs(curv[4]) * hh) * hw * hw
-      if edge > 0.25 or curv[1] ~= curv[1] then curv = { 0, 0, 0, 0 } end
+      if not (edge <= 0.25) or curv[1] ~= curv[1] or curv[2] ~= curv[2] or curv[3] ~= curv[3] or curv[4] ~= curv[4] then
+        curv = { 0, 0, 0, 0 }                                        -- 1.3: any NaN (not only the first) is rejected
+      end
     end
   end
 

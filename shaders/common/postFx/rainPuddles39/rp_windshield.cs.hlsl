@@ -35,6 +35,94 @@ float3 rpWindBlur(int2 q, int r)
          + (rpWindLoad(q + int2(r, 0)) + rpWindLoad(q - int2(r, 0)) + rpWindLoad(q + int2(0, r)) + rpWindLoad(q - int2(0, r))) * 0.18;
 }
 
+// 1.3: the frame seen through a drop, bilinear (colour buffer through the atlas' linear clamp sampler), as the body drops
+float3 rpWindTap(float2 pos, float2 invSize)
+{
+    float2 lo = dispatchRect.xy + 1.0;
+    float2 hi = dispatchRect.xy + dispatchRect.zw - 2.0;
+    return colorTexTex.SampleLevel(dropTex_sampler_, (clamp(pos, lo, hi) + 0.5) * invSize, 0).rgb;
+}
+
+// 1.3: depth-buffer value at screen pixel q, through the depth slot's own uv (render scaling / upscaling)
+float rpWindDepthAt(int2 q)
+{
+    float2 uv = (float2(q) + 0.5 - dispatchRect.xy) / max(dispatchRect.zw, float2(1.0, 1.0));
+    return windDepthTex.SampleLevel(windDepth_sampler_, viewportCoordToRenderTarget(uv, rtParams1), 0).r;
+}
+
+// 1.3 (as the body drops): sky visible along the top of the screen, 8 probes at the same addresses for every pixel:
+// its average for reflections that leave the screen, plus the brightest direction (sun side) and colour for the glints.
+float3 rpWindVisibleSky(int2 p, float3 ray0, float3 dxr, float3 dyr, out float conf, out float3 keyDir, out float3 keyCol)
+{
+    float3 sum = float3(0.0, 0.0, 0.0);
+    float3 kd = float3(0.0, 0.0, 0.0);
+    float n = 0.0;
+    float bestL = 0.0;
+    keyCol = float3(0.0, 0.0, 0.0);
+    [unroll]
+    for (int i = 0; i < 8; i++)
+    {
+        int2 q = rpClampPix(int2(dispatchRect.xy + float2((float(i) + 0.5) / 8.0, 0.05) * dispatchRect.zw));
+        if (rpIsSkyDepth(rpWindDepthAt(q)))
+        {
+            float3 c = rpWindLoad(q);
+            float L = rpLuma(c);
+            float3 dir = normalize(ray0 + dxr * float(q.x - p.x) + dyr * float(q.y - p.y));
+            sum += c;
+            n += 1.0;
+            kd += dir * (L * L);
+            if (L > bestL)
+            {
+                bestL = L;
+                keyCol = c;
+            }
+        }
+    }
+    conf = saturate(n / 2.0);
+    keyDir = (dot(kd, kd) > 1e-12) ? normalize(kd) : float3(0.0, 0.0, 1.0);
+    keyDir = normalize(float3(keyDir.xy, max(keyDir.z, 0.15)));
+    return sum / max(n, 1.0);
+}
+
+// 1.3 (as the body drops): the reflection along R read from the frame (far field), else the visible / ambient sky
+float3 rpWindEnvRefl(float3 R, int2 p, float3 prk, float3 pra, float3 prb, float3 skyFill, float skyConf)
+{
+    float3 res = lerp(rpSkyColor(R) * 0.318, skyFill, skyConf);
+    float2 off = float2(0.0, 0.0);
+    if (rpProjectFast(prk, pra, prb, R, off))
+    {
+        int2 q = int2(round(float2(p) + off));
+        float2 rel = (float2(q) - dispatchRect.xy) / max(dispatchRect.zw, float2(1.0, 1.0));
+        float conf = smoothstep(0.0, 0.08, rel.x) * (1.0 - smoothstep(0.92, 1.0, rel.x))
+                   * smoothstep(0.0, 0.08, rel.y) * (1.0 - smoothstep(0.92, 1.0, rel.y));
+        if (conf > 0.001)
+        {
+            float3 c = rpWindLoad(q) * 0.5
+                     + (rpWindLoad(q + int2(2, 0)) + rpWindLoad(q - int2(2, 0))
+                      + rpWindLoad(q + int2(0, 2)) + rpWindLoad(q - int2(0, 2))) * 0.125;
+            res = lerp(res, c, conf * 0.85);
+        }
+    }
+    return res;
+}
+
+// 1.3: average brightness of the frame (8 fixed taps): the lamp sparks are scaled by it, since a post effect cannot read
+// the camera's exposure
+float rpWindFrameLuma()
+{
+    float s = 0.0;
+    [unroll]
+    for (int gy = 0; gy < 2; gy++)
+    {
+        [unroll]
+        for (int gx = 0; gx < 4; gx++)
+        {
+            s += rpLuma(rpWindLoad(int2(dispatchRect.xy + float2((float(gx) + 0.5) / 4.0, (float(gy) + 0.5) / 2.0) * dispatchRect.zw)));
+        }
+    }
+    return s / 8.0;
+}
+
 bool rpAtlasValid()
 {
     float4 m = dropTexTex.SampleLevel(dropTex_sampler_, RP_ATLAS_CAL_UV, 0.0);
@@ -80,7 +168,7 @@ float rpWipeAge(float2 q, float4 bl, float2 rr, float ph, float tc, float sweepT
     float2 d = q - bl.xy;
     float rho = length(d);
     float rng = (bl.w >= 0.0) ? max(bl.w, 1e-3) : min(bl.w, -1e-3);
-    float x = rpWrapPi(atan2(d.y, d.x) - bl.z) / rng;
+    float x = rpWrapPi(atan2(d.y, d.x + 1e-9) - bl.z) / rng;   // 1.3: never atan2(0, 0)
     reach = (rho > rr.x && rho < rr.y && x >= 0.0 && x <= 1.0) ? 1.0 : 0.0;
     if (reach > 0.5 && fmod(flags, 2.0) > 0.5)
     {
@@ -283,7 +371,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     float ndc = windDepthTex.SampleLevel(windDepth_sampler_, IN.uv1, 0).r;
     float beyond = 1.0;
     float sceneDist = 1e5;
-    if (ndc < 0.99999)
+    if (!rpIsSkyDepth(ndc))   // 1.3: was ndc < 0.99999, which let the reversed-Z sky (0) through as an infinite depth
     {
         float lin = abs(ndcToRealDepth(ndc, projParams)) / max(abs(projParams.y), 1e-6);
         sceneDist = length(rpReconstruct(ray0, camFwd, lin, rpMode.y, rpMode.z));
@@ -386,7 +474,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
                 float2 dB = pc - bq[bd].xy;
                 float rhoB = length(dB);
                 float rngB = (bq[bd].w >= 0.0) ? max(bq[bd].w, 1e-3) : min(bq[bd].w, -1e-3);
-                float xB = rpWrapPi(atan2(dB.y, dB.x) - bq[bd].z) / rngB;
+                float xB = rpWrapPi(atan2(dB.y, dB.x + 1e-9) - bq[bd].z) / rngB;
                 bool inR = (rhoB > brr[bd].x && rhoB < brr[bd].y);
                 if (inR && xB >= 0.0 && xB <= 1.0)
                 {
@@ -699,27 +787,160 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
         float cover = saturate(sh.w * bestA) * glass;
         if (cover > 0.001)
         {
+            // ---- 1.3: the body droplets' optics, 1:1 (rp_droplets.cs.hlsl): refraction, Fresnel, light catch ----------
+            // (1.2 drew a fixed white highlight at the upper left of every drop, a milky sky veil over all of it and a
+            // wide dark ring, and moved the image behind a drop by 1.6 radii at most: the drops read as bubbles by day and
+            // showed nothing at night.)
             float2 nt = sh.xy * float2(1.0, 1.0 / bestStretch);
             float2 nn = nt.x * bestAx + nt.y * bestAy;                    // slope in glass axes (right, up)
+            float nz = sqrt(saturate(1.0 - dot(nn, nn)));
             float3 tang = rpWindC.xyz * nn.x + rpWindD.xyz * nn.y;
-            // A drop on the glass is a small lens: it shows a displaced, inverted, blurred view of what lies behind it.
-            // The slope is projected to the screen, so this holds from the seat and from outside (mirrored axes).
-            float2 o = -float2(dot(tang, scrX), dot(tang, scrY)) * radPx * 1.6 * rpWindF.w;
-            o = clamp(o, float2(-96.0, -96.0), float2(96.0, 96.0));
-            int b = clamp(int(radPx * 0.18), 1, 8);
-            int2 q0 = p + int2(round(o));
-            float3 through = rpWindBlur(q0, b);
+            float3 nd = normalize(rpWindB.xyz * max(nz, 0.05) + tang);    // drop surface normal, out of the car
             float thick = saturate(sh.z);
-            float rim = 1.0 - smoothstep(0.0, 0.5, thick);
-            float3 nd = normalize(rpWindB.xyz * max(sqrt(saturate(1.0 - dot(nn, nn))), 0.05) + tang);
-            float3 V = normalize(ro - Pw);
-            // 1.2 'Fresnel' of the glass drops (rpWindF.y, 1 = the look so far): how much of a mirror their rim becomes
-            float F = saturate(rpFresnel(0.02, saturate(dot(nd, V))) * max(rpWindF.y, 0.0));
-            float3 skyRefl = rpSkyColor(reflect(-V, nd)) * 0.318;
-            float hl = pow(saturate(dot(nn, float2(-0.35, 0.85)) * 1.1), 8.0) * thick;
-            float3 dcol = through * (1.0 - 0.60 * rim);
-            dcol += skyRefl * (0.08 + 0.6 * F);
-            dcol += hl * (0.06 + 0.5 * rpLuma(through));
+            const float3 V = -rd;                                          // toward the eye
+            const float3 dxr = INx.wsEyeRay - ray0;
+            const float3 dyr = INy.wsEyeRay - ray0;
+            float3 prk = float3(0.0, 0.0, 0.0);
+            float3 pra = float3(0.0, 0.0, 0.0);
+            float3 prb = float3(0.0, 0.0, 0.0);
+            rpMakeProj(ray0, dxr, dyr, prk, pra, prb);
+
+            // Refraction: a drop is a strong little lens. What it shows comes from several drop radii away and upside
+            // down, most of all toward its rim: the slope x the drop's size projected to the screen (from the seat and
+            // from outside alike), read bilinear with a little dispersion.
+            float3 offW = Pw - ro;
+            float2 o0 = float2(0.0, 0.0);
+            float2 o1 = float2(0.0, 0.0);
+            bool okA = rpProjectFast(prk, pra, prb, offW, o0);
+            float lensScale = ((bestTile > 15.5) ? bestR * (0.18 / 0.56) : bestR) * halfH;   // metres, as the body
+            bool okB = rpProjectFast(prk, pra, prb, offW + tang * lensScale, o1);
+            float lensK = rpWindF.w * (2.0 + 2.6 * thick);
+            float2 rOff = (okA && okB) ? -(o1 - o0) * lensK : float2(0.0, 0.0);
+            float rMax = 96.0 * max(dispatchRect.w / 1080.0, 0.5);
+            rOff = clamp(rOff, float2(-rMax, -rMax), float2(rMax, rMax));
+            uint tw, th;
+            colorTexTex.GetDimensions(tw, th);
+            float2 invSize = 1.0 / float2(max(tw, 1u), max(th, 1u));
+            float2 pp = float2(p);
+            float3 refr = float3(0.0, 0.0, 0.0);
+            refr.r = rpWindTap(pp + rOff * 1.05, invSize).r;
+            refr.g = rpWindTap(pp + rOff, invSize).g;
+            refr.b = rpWindTap(pp + rOff * 0.95, invSize).b;
+
+            float skyConf = 0.0;
+            float3 keyDir = float3(0.0, 0.0, 1.0);
+            float3 keyCol = float3(0.0, 0.0, 0.0);
+            float3 skyFill = rpWindVisibleSky(p, ray0, dxr, dyr, skyConf, keyDir, keyCol);
+            float3 dOut = float3(0.0, 0.0, 0.0);                          // seat view: the ray leaving the drop
+            float fresPhys = 0.0;
+            float3 env = float3(0.0, 0.0, 0.0);
+            if (outside)
+            {
+                // the drop's curved surface faces the camera: Fresnel of water, mirroring the world (as on the paint)
+                fresPhys = rpFresnel(0.02, saturate(dot(nd, V)));
+                env = rpWindEnvRefl(reflect(rd, nd), p, prk, pra, prb, skyFill, skyConf);
+            }
+            else
+            {
+                // From the seat the drop is seen from inside the water: its curved surface mirrors the dim cabin (total
+                // internal reflection toward the rim), and the ray that leaves it bends toward the drop's axis.
+                float3 rdw = refract(rd, -rpWindB.xyz, 0.7519);
+                float cosW = dot(rdw, nd);
+                fresPhys = (cosW > 0.0) ? rpFresnelWaterIn(cosW) : 0.0;
+                dOut = refract(rdw, -nd, 1.33);
+                env = min(col, rpSkyColor(-rpWindB.xyz) * 0.318) * 0.35;
+                // That ray leaves the car through the glass: where the shifted pixel shows the cabin itself (roof liner,
+                // pillar, dashboard: nearer than the glass) or lies off screen, the drop shows the sky / the ground along
+                // that direction instead.
+                float2 qs = pp + rOff;
+                float3 rayS = ray0 + dxr * rOff.x + dyr * rOff.y;
+                // how far (px) beyond the frame's edge: blended in over 12 px, so a drop does not pop at the edge
+                float2 outLo = dispatchRect.xy - qs;
+                float2 outHi = qs - (dispatchRect.xy + dispatchRect.zw - 1.0);
+                float wOff = saturate(max(max(outLo.x, outLo.y), max(outHi.x, outHi.y)) / 12.0);
+                bool offScr = wOff >= 1.0;
+                bool cabin = false;
+                float ndcS = rpWindDepthAt(int2(round(qs)));
+                if (!offScr && !rpIsSkyDepth(ndcS))
+                {
+                    float linS = abs(ndcToRealDepth(ndcS, projParams)) / max(abs(projParams.y), 1e-6);
+                    cabin = length(rpReconstruct(rayS, camFwd, linS, rpMode.y, rpMode.z)) < t + 0.18;
+                }
+                float wFb = cabin ? 1.0 : wOff;
+                if (wFb > 0.0)
+                {
+                    float3 dirS = normalize(rayS);
+                    refr = lerp(refr, lerp(rpSkyColor(dirS) * 0.318, skyFill, skyConf * saturate(dirS.z * 4.0)), wFb);
+                }
+            }
+
+            // Light catch (rpLightK.x, as the beads' 'Light catch'): the rim mirrors more where what it mirrors is much
+            // brighter than what is seen through the glass around the drop (the sky over the dark cabin from outside),
+            // colour-neutral; elsewhere the drop keeps the plain 'Fresnel' and stays clear water.
+            const float fresBaseK = max(rpWindF.y, 0.0);
+            const float catchK = max(rpLightK.x, 0.0);
+            float lumEnv = max(env.r, max(env.g, env.b));
+            // (the cabin behind the glass is always dark: a floor under it, and the rim never mirrors more than water)
+            float lumBack = max(max(col.r, max(col.g, col.b)), 0.05);
+            float gateL = smoothstep(4.0, 8.0, lumEnv / lumBack) * saturate(catchK * 4.0);
+            float fresTopK = max(min(catchK, 1.0), fresBaseK);
+            float fresB = saturate(fresPhys * fresBaseK);
+            float fres = saturate(fresPhys * lerp(fresBaseK, fresTopK, gateL));
+            float3 envNeutral = lerp(rpLuma(env).xxx, env, 0.25);
+            float3 envMix = (env * fresB + envNeutral * max(fres - fresB, 0.0)) / max(fres, 1e-5);
+
+            float darkRim = 1.0 - smoothstep(0.0, 0.25, thick);           // the thin dark edge that outlines a real drop
+            // caustic: light from the sky focuses on the down-slope side of the drop
+            float2 up2 = float2(rpWindC.z, rpWindD.z);
+            float2 upT = float2(dot(up2, bestAx), dot(up2, bestAy));
+            float caustic = pow(saturate(-dot(bestQ, upT / max(length(upT), 1e-3))), 2.0) * saturate(thick * 1.5) * 0.40;
+            // glint: the brightest visible sky (sun side), mirrored from outside, seen through the drop from the seat
+            float glint = 0.0;
+            float soft = 0.0;
+            if (outside)
+            {
+                float3 Hk = normalize(keyDir + V);
+                glint = pow(saturate(dot(nd, Hk)), 420.0) * skyConf;
+                soft = pow(saturate(dot(nd, Hk)), 40.0) * skyConf * saturate(thick * 2.0);
+            }
+            else
+            {
+                float cK = saturate(dot(dOut, keyDir));
+                glint = pow(cK, 900.0) * skyConf;
+                soft = pow(cK, 60.0) * skyConf * saturate(thick * 2.0) * 0.5;
+            }
+
+            float3 dcol = refr * float3(0.97, 0.985, 0.99);
+            dcol *= 1.0 - (0.35 + 0.12 * saturate(catchK)) * darkRim;
+            dcol += refr * caustic;
+            dcol = dcol * (1.0 - fres) + envMix * fres;
+            dcol += keyCol * (glint * 5.0 + soft * 0.35);
+
+            // Light catch at night: every lamp nearby shows in the drops as a tiny, sharp spark - from the seat the
+            // inverted image each drop makes of the lamps ahead (so the whole windshield glitters under street lights),
+            // from outside the lamps mirrored in the drops. Mostly white; relative to the frame's brightness.
+            const int nL = int(rpLightK.y + 0.5);
+            if (nL > 0 && catchK > 0.001 && rpLightK.w > 0.001 && (outside || dot(dOut, dOut) > 0.5))
+            {
+                float3 dirL = outside ? reflect(rd, nd) : dOut;
+                float kE = rpSparkExp(outside ? clamp(1.1 / radPx, 0.05, 0.35) : clamp(0.75 / radPx, 0.035, 0.35));
+                float3 sp = float3(0.0, 0.0, 0.0);
+                if (nL > 0) sp += rpLampSpark(Pw, dirL, kE, rpLightA0, rpLightB0, rpLightC0);
+                if (nL > 1) sp += rpLampSpark(Pw, dirL, kE, rpLightA1, rpLightB1, rpLightC1);
+                if (nL > 2) sp += rpLampSpark(Pw, dirL, kE, rpLightA2, rpLightB2, rpLightC2);
+                if (nL > 3) sp += rpLampSpark(Pw, dirL, kE, rpLightA3, rpLightB3, rpLightC3);
+                if (nL > 4) sp += rpLampSpark(Pw, dirL, kE, rpLightA4, rpLightB4, rpLightC4);
+                if (nL > 5) sp += rpLampSpark(Pw, dirL, kE, rpLightA5, rpLightB5, rpLightC5);
+                if (nL > 6) sp += rpLampSpark(Pw, dirL, kE, rpLightA6, rpLightB6, rpLightC6);
+                if (nL > 7) sp += rpLampSpark(Pw, dirL, kE, rpLightA7, rpLightB7, rpLightC7);
+                float through = outside ? min(fresPhys / 0.02, 6.0) : (1.0 - fresPhys);
+                float frameL = max(rpWindFrameLuma(), 1e-4);
+                float kS = catchK * saturate(rpLightK.w) * frameL / max(rpLightK.z, 1e-3) * RP_SPARK_GAIN
+                         * through * (outside ? smoothstep(0.4, 1.2, radPx) : smoothstep(0.8, 2.0, radPx));
+                // from the seat a spark is the lamp itself (its colour stays), mirrored ones are mostly white
+                float3 spC = lerp(rpLuma(sp).xxx, sp, outside ? 0.5 : 0.75) * kS;
+                dcol += spC * min(1.0, RP_SPARK_CAP * frameL / max(rpLuma(spC), 1e-6));
+            }
             col = lerp(col, dcol, cover);
         }
     }
@@ -737,5 +958,5 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
         col = lerp(col, float3(1.0, 1.0, 1.0) * B, saturate(bestA * 2.0) * glass);
     }
 
-    pfxOut[storePos] = float4(col, src.a);
+    pfxOut[storePos] = float4(rpSafe(col, src.rgb), src.a);
 }

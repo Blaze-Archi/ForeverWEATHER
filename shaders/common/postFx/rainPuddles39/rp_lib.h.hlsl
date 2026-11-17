@@ -270,4 +270,75 @@ float2 rpAtlasUV(float2 q, float tile)
 // centre of the calibration tile 15 (column 3, row 3)
 static const float2 RP_ATLAS_CAL_UV = float2(0.875, 0.4375);
 
+// 1.3: a NaN or infinite colour (or a negative one) never leaves a pass. The engine's temporal AA / upscaler spreads a
+// single bad pixel into black blocks that flicker. The bit test survives fast-math compilers that drop isnan().
+bool rpBadF(float x)
+{
+    return (asuint(x) & 0x7F800000u) == 0x7F800000u;
+}
+bool rpBad3(float3 c)
+{
+    return rpBadF(c.r) || rpBadF(c.g) || rpBadF(c.b);
+}
+float3 rpSafe(float3 c, float3 fallback)
+{
+    if (rpBad3(c))
+    {
+        c = rpBad3(fallback) ? float3(0.0, 0.0, 0.0) : fallback;
+    }
+    return max(c, 0.0);
+}
+
+// 1.3: Fresnel of a water surface seen from INSIDE the water (the windshield drops from the cabin: the ray leaves the
+// drop through its curved surface). cosI = cosine between the ray in the water and the surface normal. Schlick on the
+// air side; total internal reflection beyond the critical angle (48.8 deg for water).
+float rpFresnelWaterIn(float cosI)
+{
+    float s2 = 1.7689 * saturate(1.0 - cosI * cosI);
+    if (s2 >= 1.0)
+    {
+        return 1.0;
+    }
+    return rpFresnel(0.02, sqrt(1.0 - s2));
+}
+
+// 1.3 light catch at night: a lamp of the level (A/B/C as in the puddle pass: A position + range, B colour x brightness +
+// cos inner angle (2 = point light), C spot axis + cos outer angle) seen in a drop. dirOut = the direction the drop
+// shows at this pixel: the mirrored view ray for the reflection on its surface, the ray leaving it for the tiny inverted
+// image a drop on glass shows of what lies behind it. kExp = sharpness of the spark. A bulb looks as bright from any
+// distance (only smaller), so the spark falls off as 1 / distance (1 at 6 m), not 1 / distance^2; a spot lamp seen
+// from outside its cone still glares a little. Returns colour x weight, relative to the lamp's own intensity.
+float3 rpLampSpark(float3 P, float3 dirOut, float kExp, float4 A, float4 B, float4 C)
+{
+    if (max(B.r, max(B.g, B.b)) <= 0.0)   // unused slot (Lua sends 0 0 0 0)
+    {
+        return float3(0.0, 0.0, 0.0);
+    }
+    float3 Lv = A.xyz - P;
+    float d2 = max(dot(Lv, Lv), 1e-4);
+    float3 L = Lv * rsqrt(d2);
+    float g = pow(saturate(dot(dirOut, L)), kExp);
+    if (g < 1e-3)
+    {
+        return float3(0.0, 0.0, 0.0);
+    }
+    float spot = 1.0;
+    if (B.w < 1.5)
+    {
+        spot = max(saturate((dot(-L, C.xyz) - C.w) / max(B.w - C.w, 1e-3)), 0.2);
+    }
+    return max(B.rgb, 0.0) * (g * spot * sqrt(min(36.0 / d2, 4.0)));
+}
+
+// brightness of the lamp sparks: x the frame's average brightness / the mean lamp (tuned in game)
+static const float RP_SPARK_GAIN = 20.0;
+// and never brighter than this many times the frame's average (single very bright pixels shimmer under temporal AA)
+static const float RP_SPARK_CAP = 60.0;
+
+// sharpness exponent of a spark whose half-maximum lies 'halfAngle' (radians) off its centre
+float rpSparkExp(float halfAngle)
+{
+    return 0.693 / max(1.0 - cos(halfAngle), 1e-5);
+}
+
 #endif

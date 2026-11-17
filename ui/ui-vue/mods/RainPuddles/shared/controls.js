@@ -84,7 +84,7 @@ export const SLIDERS = {
   groundReflBoth: [
     { k: "roadReflection", l: "Reflection strength", a: 0, b: 1, st: 0.01, d: 2, hint: "How reflective the wet road gets. BeamNG's own reflections: how much glossier the road materials become. Own trace: the reflectance." },
     { k: "roadFlood", l: "Puddle-like at max rain", a: 0, b: 1, st: 0.01, d: 2, hint: "As the ground gets wetter it turns into the puddle look: 1 = exactly the puddle settings at full rain, 0 = always wet asphalt." },
-    { k: "lightStreaks", l: "Light streaks", a: 0, b: 1, st: 0.01, d: 2, hint: "Vertical streaks of lights in wet-road reflections (mod's trace)." },
+    { k: "lightStreaks", l: "Light streaks", a: 0, b: 1, st: 0.01, d: 2, hint: "Vertical streaks of lights in wet-road reflections (mod's trace), and how far the street lamps' highlights stretch toward you on rough wet asphalt (up to 5x at low angles). Deep puddles keep a sharp mirror image." },
     { k: "lampHighlights", l: "Lamp highlights (night)", a: 0, b: 2, st: 0.05, d: 2, hint: "At night the wet road shines under the street lamps (the map's own lights, up to 24 of them, in their own colours)." },
   ],
   // own trace only
@@ -110,7 +110,7 @@ export const SLIDERS = {
     { k: "vehMaskHeight", l: "Keep off cars: mask height (m)", a: 0.03, b: 0.8, st: 0.01, d: 2, hint: "Inside a car's box, anything this far above the road counts as the car (no puddles or wet ground on it). Lower it if puddles still show on low bodywork, raise it if a dry patch appears around the car." },
   ],
   puddleRefl: [
-    { k: "puddleReflection", l: "Reflectivity (1 = mirror)", a: 0, b: 1, st: 0.01, d: 2, hint: "0 = physical water (dark up close, mirror toward the horizon), 1 = mirror at every angle." },
+    { k: "puddleReflection", l: "Reflectivity (1 = mirror)", a: 0, b: 1, st: 0.01, d: 2, hint: "0 = physical water: nearly clear looking straight down (you see the dark bed), a mirror toward the horizon. Higher values make the puddles more of a mirror but keep that angle: at 1 about 45 % straight down, a full mirror at low angles." },
     { k: "skyReflection", l: "Fallback brightness", a: 0, b: 3, st: 0.05, d: 2, hint: "Brightness of what a missed reflection shows (see 'When the reflection misses')." },
     { k: "reflectionBlur", l: "Reflection blur", a: 0, b: 1, st: 0.01, d: 2 },
     { k: "ssrSteps", l: "Trace steps", a: 8, b: 48, st: 1, d: 0 },
@@ -133,7 +133,7 @@ export const SLIDERS = {
     { k: "dropletSize", l: "Bead radius (m)", a: 0.004, b: 0.04, st: 0.001, d: 3, hint: "At 2.5 mm raindrops; scaled by 'Rain droplet size' (Falling rain section)." },
     { k: "dropletRefraction", l: "Refraction", a: -1.5, b: 2.5, st: 0.05, d: 2, hint: "How strongly each bead works as a lens: it shows a small, upside-down image of what lies around it." },
     { k: "dropletFresnel", l: "Fresnel (mirror rim)", a: 0, b: 2, st: 0.01, d: 2, hint: "How much of a mirror a bead's rim becomes (they stay clear where they face you). Low values keep the beads clear water; high values turn their rims into bright mirrors, like bubbles." },
-    { k: "dropletLightCatch", l: "Light catch", a: 0, b: 2, st: 0.05, d: 2, hint: "Where a bead mirrors something far brighter than the paint around it (the sky over a dark car, lit streets and lamps at night), its rim catches that light, so the drops show in the dark. Beads on mid and light paint by day stay clear lenses. It only brightens the rims, it never tints them. 0 = the plain Fresnel everywhere." },
+    { k: "dropletLightCatch", l: "Light catch", a: 0, b: 2, st: 0.05, d: 2, hint: "Where a bead mirrors something far brighter than the paint around it (the sky over a dark car, lit streets), its rim catches that light, so the drops show in the dark. At night every street lamp nearby also makes a tiny, mostly white spark on the beads that mirror it. Beads on mid and light paint by day stay clear lenses. It never tints the beads. 0 = the plain Fresnel everywhere." },
     { k: "dropletSpeed", l: "Rain-hit / life rate", a: 0.1, b: 4, st: 0.05, d: 2 },
     { k: "dropletRunners", l: "Moving droplets", a: 0, b: 1, st: 0.01, d: 2, hint: "Drops that run backward with the airflow and down the panels with gravity." },
     { k: "dropletTrails", l: "Wet trails", a: 0, b: 1, st: 0.01, d: 2 },
@@ -154,8 +154,9 @@ export const SLIDERS = {
   windshield: [
     { k: "windshieldDensity", l: "Rain density", a: 0, b: 1.8, st: 0.01, d: 2 },
     { k: "windshieldSize", l: "Bead radius (m)", a: 0.002, b: 0.03, st: 0.001, d: 3, hint: "At 2.5 mm raindrops; scaled by 'Rain droplet size' (Falling rain section)." },
-    { k: "glassRefraction", l: "Glass drops: refraction", a: -1.5, b: 2.5, st: 0.05, d: 2, hint: "How strongly each drop on the windshield, rear and side windows works as a lens (the view behind it, upside down and blurred)." },
-    { k: "glassFresnel", l: "Glass drops: Fresnel (mirror rim)", a: 0, b: 2, st: 0.01, d: 2, hint: "How much of a mirror the rim of a drop on the glass becomes. 1 = water; 0 = no mirror rim." },
+    { k: "glassRefraction", l: "Glass drops: refraction", a: -1.5, b: 2.5, st: 0.05, d: 2, hint: "How strongly each drop on the windshield, rear and side windows works as a lens: a small, upside-down image of the world around it. Same optics and scale as the body drops' Refraction." },
+    { k: "glassFresnel", l: "Glass drops: Fresnel (mirror rim)", a: 0, b: 2, st: 0.01, d: 2, hint: "How much of a mirror the rim of a drop on the glass becomes, as a share of real water's Fresnel (same scale as the body drops). Higher values look like bubbles." },
+    { k: "glassLightCatch", l: "Glass drops: light catch", a: 0, b: 2, st: 0.05, d: 2, hint: "As the beads' Light catch. From outside, rims catch the bright sky over the dark cabin. At night every street lamp ahead shows in the drops as a tiny spark (from the seat the windshield glitters). 0 = off." },
     { k: "wiperSpeed", l: "Wiper speed", a: 0.1, b: 3, st: 0.05, d: 2 },
     { k: "wiperTrail", l: "Wiper trail width", a: 0, b: 1, st: 0.01, d: 2 },
   ],

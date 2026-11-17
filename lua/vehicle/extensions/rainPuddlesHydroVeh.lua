@@ -120,7 +120,7 @@ end
 -- puddle amount and depth ramp at world xy (rp_puddles.cs.hlsl: shape, cut, puddle, depthP)
 local function puddleAt(x, y)
   local e = env
-  local tile = e.tile
+  local tile = max(tonumber(e.tile) or 44, 0.5)   -- 1.3: never 0 (x / 0 every physics step)
   local nA = sampleField(fieldA, x / tile, y / tile)
   local tb = tile * 0.57
   local nB = sampleField(fieldB, (x * 0.8660254 - y * 0.5) / tb + 0.37, (x * 0.5 + y * 0.8660254) / tb + 0.61)
@@ -366,6 +366,7 @@ local function evaluate(w, dtEval, ox, oy, oz, mode, strength)
       local g = (over > 0) and smoothstep(0, mode.hFull, over) or 0
       local lam = min(mode.cl * q * g / p * strength, lamCap)
       local lp = (w.lam[slot] or 0)
+      if lp ~= lp then lp = 0 end                                    -- 1.3: a NaN never sticks to a slot
       lp = lp + (lam - lp) * kS
       w.lam[slot] = lp
       local up = lp * L * share                                      -- at most 95 % of the load this node carries
@@ -386,6 +387,8 @@ end
 local function clearWheel(w)
   w.nSlots, w.liftPrev, w.lamAvg = 0, 0, 0
   for i in pairs(w.lam) do w.lam[i] = 0 end
+  -- 1.3: no stale force is applied when the tyre comes back on before its next evaluation
+  for i in pairs(w.fz) do w.fx[i], w.fy[i], w.fz[i] = 0, 0, 0 end
 end
 
 -- hooks -------------------------------------------------------------------------------------------------------------------

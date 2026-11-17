@@ -22,8 +22,9 @@ end
 local function envString(e)
   return string.format(
     '{enabled=%s,mode=%d,strength=%s,tread=%s,debug=%s,puddles=%s,roadsOnly=%s,tile=%s,cov=%s,sizeWarp=%s,soft=%s,fieldA=%q,fieldB=%q,hFilm=%s,hPuddle=%s}',
-    tostring(e.enabled), e.mode, num(e.strength), num(e.tread), tostring(e.debug), tostring(e.puddles), tostring(e.roadsOnly),
-    num(e.tile), num(e.cov), num(e.sizeWarp), num(e.soft), e.fieldA, e.fieldB, num(e.hFilm), num(e.hPuddle))
+    tostring(e.enabled), math.floor(tonumber(e.mode) or 0), num(e.strength), num(e.tread), tostring(e.debug),
+    tostring(e.puddles), tostring(e.roadsOnly), num(e.tile), num(e.cov), num(e.sizeWarp), num(e.soft),
+    tostring(e.fieldA or ''), tostring(e.fieldB or ''), num(e.hFilm), num(e.hPuddle))
 end
 
 local function currentEnv()

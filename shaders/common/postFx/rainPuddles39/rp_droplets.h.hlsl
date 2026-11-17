@@ -19,7 +19,18 @@ cbuffer perDraw : register(b0)
     uniform float4 rpDropB;    // x shell thickness, y sheen, z max distance, w rain
     uniform float4 rpDropC;    // x gravity slide, y aero, z wind influence, w inertia strength
     uniform float4 rpDropD;    // x run-off amount, y trail amount, z Fresnel of the beads (1.1), w light catch (1.2.1)
-    // (1.2: the street lamps of 1.1 / 1.1.1 - rpDropE, rpLightA..C, rpLightK - are no longer used by the beads)
+    // 1.3 light catch at night: the 8 lamps of the level nearest to the camera make a tiny, sharp spark on each bead
+    // that mirrors them (1.1's sparks were broad and lamp-coloured; these are small and mostly white).
+    // rpLightK: x light catch, y number of lamps, z their mean intensity, w night (0 by day .. 1)
+    uniform float4 rpLightA0; uniform float4 rpLightB0; uniform float4 rpLightC0;
+    uniform float4 rpLightA1; uniform float4 rpLightB1; uniform float4 rpLightC1;
+    uniform float4 rpLightA2; uniform float4 rpLightB2; uniform float4 rpLightC2;
+    uniform float4 rpLightA3; uniform float4 rpLightB3; uniform float4 rpLightC3;
+    uniform float4 rpLightA4; uniform float4 rpLightB4; uniform float4 rpLightC4;
+    uniform float4 rpLightA5; uniform float4 rpLightB5; uniform float4 rpLightC5;
+    uniform float4 rpLightA6; uniform float4 rpLightB6; uniform float4 rpLightC6;
+    uniform float4 rpLightA7; uniform float4 rpLightB7; uniform float4 rpLightC7;
+    uniform float4 rpLightK;
 
     uniform float4 rpVehA0; uniform float4 rpVehB0; uniform float4 rpVehC0; uniform float4 rpVehD0;
     uniform float4 rpVehA1; uniform float4 rpVehB1; uniform float4 rpVehC1; uniform float4 rpVehD1;

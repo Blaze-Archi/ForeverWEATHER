@@ -110,6 +110,9 @@ end
 M.onReset = function()
   lastVal, cycleAt = 0, nil
   lastValR, cycleAtR = 0, nil
+  -- 1.3: a reset re-creates the car's controllers: find the wiper controller again and resend the mode (setMode
+  -- skipped an unchanged mode, so the wipers could stay off after a reset)
+  aw, commanded, commandedR = nil, nil, nil
 end
 
 return M

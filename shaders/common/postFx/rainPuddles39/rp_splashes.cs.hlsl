@@ -82,7 +82,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     // 1.0: sampled by this slot's own uv (render scaling / upscaling can give the depth a different size than the frame)
     const float sceneNdc = prepassDepthTex.SampleLevel(rpDepthSampler, IN.uv1, 0).r;
     // 1.0: same reconstruction as the puddle pass (eye-linear depth along the far-plane eye ray)
-    const float sceneDist = (sceneNdc >= 0.99999) ? 1e5
+    const float sceneDist = rpIsSkyDepth(sceneNdc) ? 1e5   // 1.3: the reversed-Z sky (0) too
         : length(rpReconstruct(ray0, camFwd, abs(ndcToRealDepth(sceneNdc, projParams)) / max(abs(projParams.y), 1e-6), rpMode.y, rpMode.z));
 
     float4 tA[8] = { rpTyreA0, rpTyreA1, rpTyreA2, rpTyreA3, rpTyreA4, rpTyreA5, rpTyreA6, rpTyreA7 };
@@ -216,6 +216,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
                         float envL = 0.0;
                         if (rpProjectFast(prk, pra, prb, c0 + up * 0.05 - rpCam.xyz, o))
                         {
+                            o = clamp(o, float2(-4096.0, -4096.0), float2(4096.0, 4096.0));   // 1.3: no int overflow
                             int2 q = p + int2(round(o));
                             // the road below and beside the tyre (well outside the body), brightest of three
                             envL = max(rpLuma(colorTex.Load(int3(rpClampPix(q + int2(0, 14)), 0)).rgb),
@@ -246,5 +247,5 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
         col = lerp(col, float3(1.0, 0.55, 0.08) * B, saturate(dbgDens * 2.0));
     }
 
-    pfxOut[storePos] = float4(col, src.a);
+    pfxOut[storePos] = float4(rpSafe(col, src.rgb), src.a);
 }

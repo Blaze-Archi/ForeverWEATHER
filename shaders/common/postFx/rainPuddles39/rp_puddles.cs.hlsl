@@ -129,7 +129,10 @@ float2 rpLobeRadius(float2 lobe, float hk, float streakPx)
 // 1.0.2: highlight of one light on the wet film: GGX of the film's roughness (A/B/C as in rp_puddles.h.hlsl). Under a
 // street lamp a wet road shows a long glowing streak toward the viewer; the screen-space trace cannot find it (the lamps
 // hang above the top of the screen) and the engine does not draw it (it shades the road as dry asphalt).
-void rpLightGlint(float3 P, float3 N, float3 eye, float rough, float4 A, float4 B, float4 C, inout float3 spec, inout float diff)
+// 1.3 light streaks: on rough wet asphalt the lobe is stretched along the plane of incidence (toward the viewer, the screen
+// vertical on the road) by 'stretch' (anisotropic GGX, energy kept), so a lamp draws a long streak instead of a round glow;
+// deep water keeps stretch 1, a sharp mirror image of the lamp.
+void rpLightGlint(float3 P, float3 N, float3 eye, float rough, float stretch, float4 A, float4 B, float4 C, inout float3 spec, inout float diff)
 {
     float3 Lv = A.xyz - P;
     float d2 = dot(Lv, Lv);
@@ -154,10 +157,17 @@ void rpLightGlint(float3 P, float3 N, float3 eye, float rough, float4 A, float4 
             }
             float3 H = normalize(L + eye);
             float NdotH = saturate(dot(N, H));
-            float a = rough * rough;
-            float a2 = a * a;
-            float dd = NdotH * NdotH * (a2 - 1.0) + 1.0;
-            float D = a2 / (3.14159265 * dd * dd);
+            float a = max(rough, 0.03);
+            a *= a;
+            float3 Xv = eye - N * NdotV;                          // toward the viewer along the surface
+            Xv = (dot(Xv, Xv) > 1e-8) ? Xv : cross(N, float3(0.0, 1.0, 0.0)) + float3(1e-4, 0.0, 0.0);
+            Xv = normalize(Xv - N * dot(N, Xv));
+            float3 Yv = cross(N, Xv);
+            float ax = a * max(stretch, 1.0);
+            float hx = dot(H, Xv) / ax;
+            float hy = dot(H, Yv) / a;
+            float dd = hx * hx + hy * hy + NdotH * NdotH;
+            float D = 1.0 / (3.14159265 * ax * a * dd * dd);
             float k = a * 0.5;
             float G = (NdotL / (NdotL * (1.0 - k) + k)) * (NdotV / (NdotV * (1.0 - k) + k));
             float F = rpFresnel(0.02, saturate(dot(H, eye)));
@@ -649,7 +659,9 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
             float insetH = min(vA[i].w - abs(lp.x), vB[i].w - abs(lp.y));
             float lift = smoothstep(0.02, 0.06, hAbove);
             float bodyDeep = smoothstep(0.25, 0.45, insetH) * lift;
-            float bodyCam = vG[i].z * step(0.0, inner) * lift;
+            // 1.3: soft edge with a margin: a hard step(0, inner) let cabin surfaces right at the box boundary flip
+            // between car and wet ground from frame to frame (a dark flicker inside the car)
+            float bodyCam = vG[i].z * smoothstep(-0.10, 0.0, inner) * lift;
             dbgIn = 1.0;
             dbgH  = max(dbgH, hAbove);
             dbgLowH = max(dbgLowH, bodyLow);
@@ -898,7 +910,12 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     // becomes a mirror toward grazing angles; 'Reflectivity' boosts it toward a mirror (1 = mirror). The ground uses its
     // own 'Reflection strength' and turns into exactly the puddle reflectance as it floods.
     float rm         = saturate(rpPuddleA.z);
-    float puddleRefl = lerp(F, 0.97, rm * rm * rm * rm);
+    // 1.3: 'Reflectivity' is the water's reflectance straight down (0 = real water, 2 %; 1 = a mirror), and from there it
+    // rises toward grazing angles like water does. 1.2 blended toward 97 % at every angle: at the default 0.6 the puddles
+    // right under the camera mirrored 15 % of the sky instead of showing their dark bed (now 6 %); far away it is the same.
+    float rm6        = rm * rm * rm;
+    rm6             *= rm6;
+    float puddleRefl = saturate(rpFresnel(0.02 + 0.95 * rm6, NdotV));
     // 1.0: wet asphalt reflects mostly toward grazing angles (water F0 = 0.02) with only a faint sheen straight down; the
     // old 4-16 % reflectance at every angle washed out the asphalt right in front of the car.
 #if RP_GLOSS_ENERGY
@@ -1055,33 +1072,35 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     {
         float3 eye = -V;
         float glR = max(puddleRough, rpLightK.z);
+        // 1.3: up to 5x longer at grazing views ('Light streaks'), only where the film is rough (not on mirror water)
+        float glS = 1.0 + (clamp(0.4 / max(NdotV, 0.02), 1.0, 5.0) - 1.0) * saturate(rpPuddleL.x * 1.5) * smoothstep(0.06, 0.25, glR);
         float3 gl = float3(0.0, 0.0, 0.0);
         float gd = 0.0;
         const int nL = int(rpLightK.y + 0.5);                // 1.1.1: up to 24 lamps
-        if (nL > 0) rpLightGlint(P, Np, eye, glR, rpLightA0, rpLightB0, rpLightC0, gl, gd);
-        if (nL > 1) rpLightGlint(P, Np, eye, glR, rpLightA1, rpLightB1, rpLightC1, gl, gd);
-        if (nL > 2) rpLightGlint(P, Np, eye, glR, rpLightA2, rpLightB2, rpLightC2, gl, gd);
-        if (nL > 3) rpLightGlint(P, Np, eye, glR, rpLightA3, rpLightB3, rpLightC3, gl, gd);
-        if (nL > 4) rpLightGlint(P, Np, eye, glR, rpLightA4, rpLightB4, rpLightC4, gl, gd);
-        if (nL > 5) rpLightGlint(P, Np, eye, glR, rpLightA5, rpLightB5, rpLightC5, gl, gd);
-        if (nL > 6) rpLightGlint(P, Np, eye, glR, rpLightA6, rpLightB6, rpLightC6, gl, gd);
-        if (nL > 7) rpLightGlint(P, Np, eye, glR, rpLightA7, rpLightB7, rpLightC7, gl, gd);
-        if (nL > 8) rpLightGlint(P, Np, eye, glR, rpLightA8, rpLightB8, rpLightC8, gl, gd);
-        if (nL > 9) rpLightGlint(P, Np, eye, glR, rpLightA9, rpLightB9, rpLightC9, gl, gd);
-        if (nL > 10) rpLightGlint(P, Np, eye, glR, rpLightA10, rpLightB10, rpLightC10, gl, gd);
-        if (nL > 11) rpLightGlint(P, Np, eye, glR, rpLightA11, rpLightB11, rpLightC11, gl, gd);
-        if (nL > 12) rpLightGlint(P, Np, eye, glR, rpLightA12, rpLightB12, rpLightC12, gl, gd);
-        if (nL > 13) rpLightGlint(P, Np, eye, glR, rpLightA13, rpLightB13, rpLightC13, gl, gd);
-        if (nL > 14) rpLightGlint(P, Np, eye, glR, rpLightA14, rpLightB14, rpLightC14, gl, gd);
-        if (nL > 15) rpLightGlint(P, Np, eye, glR, rpLightA15, rpLightB15, rpLightC15, gl, gd);
-        if (nL > 16) rpLightGlint(P, Np, eye, glR, rpLightA16, rpLightB16, rpLightC16, gl, gd);
-        if (nL > 17) rpLightGlint(P, Np, eye, glR, rpLightA17, rpLightB17, rpLightC17, gl, gd);
-        if (nL > 18) rpLightGlint(P, Np, eye, glR, rpLightA18, rpLightB18, rpLightC18, gl, gd);
-        if (nL > 19) rpLightGlint(P, Np, eye, glR, rpLightA19, rpLightB19, rpLightC19, gl, gd);
-        if (nL > 20) rpLightGlint(P, Np, eye, glR, rpLightA20, rpLightB20, rpLightC20, gl, gd);
-        if (nL > 21) rpLightGlint(P, Np, eye, glR, rpLightA21, rpLightB21, rpLightC21, gl, gd);
-        if (nL > 22) rpLightGlint(P, Np, eye, glR, rpLightA22, rpLightB22, rpLightC22, gl, gd);
-        if (nL > 23) rpLightGlint(P, Np, eye, glR, rpLightA23, rpLightB23, rpLightC23, gl, gd);
+        if (nL > 0) rpLightGlint(P, Np, eye, glR, glS, rpLightA0, rpLightB0, rpLightC0, gl, gd);
+        if (nL > 1) rpLightGlint(P, Np, eye, glR, glS, rpLightA1, rpLightB1, rpLightC1, gl, gd);
+        if (nL > 2) rpLightGlint(P, Np, eye, glR, glS, rpLightA2, rpLightB2, rpLightC2, gl, gd);
+        if (nL > 3) rpLightGlint(P, Np, eye, glR, glS, rpLightA3, rpLightB3, rpLightC3, gl, gd);
+        if (nL > 4) rpLightGlint(P, Np, eye, glR, glS, rpLightA4, rpLightB4, rpLightC4, gl, gd);
+        if (nL > 5) rpLightGlint(P, Np, eye, glR, glS, rpLightA5, rpLightB5, rpLightC5, gl, gd);
+        if (nL > 6) rpLightGlint(P, Np, eye, glR, glS, rpLightA6, rpLightB6, rpLightC6, gl, gd);
+        if (nL > 7) rpLightGlint(P, Np, eye, glR, glS, rpLightA7, rpLightB7, rpLightC7, gl, gd);
+        if (nL > 8) rpLightGlint(P, Np, eye, glR, glS, rpLightA8, rpLightB8, rpLightC8, gl, gd);
+        if (nL > 9) rpLightGlint(P, Np, eye, glR, glS, rpLightA9, rpLightB9, rpLightC9, gl, gd);
+        if (nL > 10) rpLightGlint(P, Np, eye, glR, glS, rpLightA10, rpLightB10, rpLightC10, gl, gd);
+        if (nL > 11) rpLightGlint(P, Np, eye, glR, glS, rpLightA11, rpLightB11, rpLightC11, gl, gd);
+        if (nL > 12) rpLightGlint(P, Np, eye, glR, glS, rpLightA12, rpLightB12, rpLightC12, gl, gd);
+        if (nL > 13) rpLightGlint(P, Np, eye, glR, glS, rpLightA13, rpLightB13, rpLightC13, gl, gd);
+        if (nL > 14) rpLightGlint(P, Np, eye, glR, glS, rpLightA14, rpLightB14, rpLightC14, gl, gd);
+        if (nL > 15) rpLightGlint(P, Np, eye, glR, glS, rpLightA15, rpLightB15, rpLightC15, gl, gd);
+        if (nL > 16) rpLightGlint(P, Np, eye, glR, glS, rpLightA16, rpLightB16, rpLightC16, gl, gd);
+        if (nL > 17) rpLightGlint(P, Np, eye, glR, glS, rpLightA17, rpLightB17, rpLightC17, gl, gd);
+        if (nL > 18) rpLightGlint(P, Np, eye, glR, glS, rpLightA18, rpLightB18, rpLightC18, gl, gd);
+        if (nL > 19) rpLightGlint(P, Np, eye, glR, glS, rpLightA19, rpLightB19, rpLightC19, gl, gd);
+        if (nL > 20) rpLightGlint(P, Np, eye, glR, glS, rpLightA20, rpLightB20, rpLightC20, gl, gd);
+        if (nL > 21) rpLightGlint(P, Np, eye, glR, glS, rpLightA21, rpLightB21, rpLightC21, gl, gd);
+        if (nL > 22) rpLightGlint(P, Np, eye, glR, glS, rpLightA22, rpLightB22, rpLightC22, gl, gd);
+        if (nL > 23) rpLightGlint(P, Np, eye, glR, glS, rpLightA23, rpLightB23, rpLightC23, gl, gd);
         // Calibrated by the frame itself: the light the engine put on this spot (pre-exposed, in its own units) is the
         // frame's brightness here over the asphalt's albedo; the darkest of 5 taps, so road paint and texture do not
         // count. The film reflects that light in the lamps' directions: x (specular / diffuse) of the light model above.
@@ -1215,5 +1234,5 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
         }
     }
 
-    pfxOut[storePos] = float4(col, src.a);
+    pfxOut[storePos] = float4(rpSafe(col, src.rgb), src.a);
 }
