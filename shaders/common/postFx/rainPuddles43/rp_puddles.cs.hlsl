@@ -126,58 +126,6 @@ float2 rpLobeRadius(float2 lobe, float hk, float streakPx)
     return float2(rx, ry);
 }
 
-// 1.0.2: highlight of one light on the wet film: GGX of the film's roughness (A/B/C as in rp_puddles.h.hlsl). Under a
-// street lamp a wet road shows a long glowing streak toward the viewer; the screen-space trace cannot find it (the lamps
-// hang above the top of the screen) and the engine does not draw it (it shades the road as dry asphalt).
-// 1.3 light streaks: on rough wet asphalt the lobe is stretched along the plane of incidence (toward the viewer, the screen
-// vertical on the road) by 'stretch' (anisotropic GGX, energy kept), so a lamp draws a long streak instead of a round glow;
-// deep water keeps stretch 1, a sharp mirror image of the lamp.
-void rpLightGlint(float3 P, float3 N, float3 eye, float rough, float stretch, float4 A, float4 B, float4 C, inout float3 spec, inout float diff)
-{
-    float3 Lv = A.xyz - P;
-    float d2 = dot(Lv, Lv);
-    float r = max(A.w, 0.5);
-    if (B.w > 0.0 && d2 < r * r)
-    {
-        float d = sqrt(d2);
-        float3 L = Lv / max(d, 1e-3);
-        float NdotL = saturate(dot(N, L));
-        float NdotV = saturate(dot(N, eye));
-        if (NdotL > 0.0 && NdotV > 0.0)
-        {
-            // the engine's own falloff (clustered lighting): inverse square with a windowed cutoff at the range, and
-            // the spot cone's linear edge between its outer and inner angles
-            float t = d2 / (r * r);
-            float window = saturate(1.0 - t * t);
-            float att = window * window / max(d2, 1e-4);
-            float spot = 1.0;
-            if (B.w < 1.5)
-            {
-                spot = saturate((dot(-L, C.xyz) - C.w) / max(B.w - C.w, 1e-3));
-            }
-            float3 H = normalize(L + eye);
-            float NdotH = saturate(dot(N, H));
-            float a = max(rough, 0.03);
-            a *= a;
-            float3 Xv = eye - N * NdotV;                          // toward the viewer along the surface
-            Xv = (dot(Xv, Xv) > 1e-8) ? Xv : cross(N, float3(0.0, 1.0, 0.0)) + float3(1e-4, 0.0, 0.0);
-            Xv = normalize(Xv - N * dot(N, Xv));
-            float3 Yv = cross(N, Xv);
-            float ax = a * max(stretch, 1.0);
-            float hx = dot(H, Xv) / ax;
-            float hy = dot(H, Yv) / a;
-            float dd = hx * hx + hy * hy + NdotH * NdotH;
-            float D = 1.0 / (3.14159265 * ax * a * dd * dd);
-            float k = a * 0.5;
-            float G = (NdotL / (NdotL * (1.0 - k) + k)) * (NdotV / (NdotV * (1.0 - k) + k));
-            float F = rpFresnel(0.02, saturate(dot(H, eye)));
-            float w = att * spot;
-            spec += B.rgb * (w * D * G * F / (4.0 * NdotV));
-            diff += dot(B.rgb, float3(0.2126, 0.7152, 0.0722)) * w * NdotL;
-        }
-    }
-}
-
 float rpSceneMetres(int2 q)
 {
     float ndc = rpDepthLoad(rpClampPix(q));
@@ -1065,54 +1013,6 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     // only, further away the bright outlines read as rings painted on the road).
     float ringK = saturate(length(rip) * 5.0) * smoothstep(0.02, 0.35, puddleW) * (1.0 - smoothstep(8.0, 25.0, dist));
     col += lerp(refl, sky, 0.3) * (ringK * 0.08 * reflVis);
-
-    // 1.0.2: the wet film's highlights of the level's lights (street lamps), on the film this pass draws and in puddles
-    float wetGl = max(puddleWet, filmOwn);
-    if (rpLightK.y > 0.5 && wetGl > 0.01)
-    {
-        float3 eye = -V;
-        float glR = max(puddleRough, rpLightK.z);
-        // 1.3: up to 5x longer at grazing views ('Light streaks'), only where the film is rough (not on mirror water)
-        float glS = 1.0 + (clamp(0.4 / max(NdotV, 0.02), 1.0, 5.0) - 1.0) * saturate(rpPuddleL.x * 1.5) * smoothstep(0.06, 0.25, glR);
-        float3 gl = float3(0.0, 0.0, 0.0);
-        float gd = 0.0;
-        const int nL = int(rpLightK.y + 0.5);                // 1.1.1: up to 24 lamps
-        if (nL > 0) rpLightGlint(P, Np, eye, glR, glS, rpLightA0, rpLightB0, rpLightC0, gl, gd);
-        if (nL > 1) rpLightGlint(P, Np, eye, glR, glS, rpLightA1, rpLightB1, rpLightC1, gl, gd);
-        if (nL > 2) rpLightGlint(P, Np, eye, glR, glS, rpLightA2, rpLightB2, rpLightC2, gl, gd);
-        if (nL > 3) rpLightGlint(P, Np, eye, glR, glS, rpLightA3, rpLightB3, rpLightC3, gl, gd);
-        if (nL > 4) rpLightGlint(P, Np, eye, glR, glS, rpLightA4, rpLightB4, rpLightC4, gl, gd);
-        if (nL > 5) rpLightGlint(P, Np, eye, glR, glS, rpLightA5, rpLightB5, rpLightC5, gl, gd);
-        if (nL > 6) rpLightGlint(P, Np, eye, glR, glS, rpLightA6, rpLightB6, rpLightC6, gl, gd);
-        if (nL > 7) rpLightGlint(P, Np, eye, glR, glS, rpLightA7, rpLightB7, rpLightC7, gl, gd);
-        if (nL > 8) rpLightGlint(P, Np, eye, glR, glS, rpLightA8, rpLightB8, rpLightC8, gl, gd);
-        if (nL > 9) rpLightGlint(P, Np, eye, glR, glS, rpLightA9, rpLightB9, rpLightC9, gl, gd);
-        if (nL > 10) rpLightGlint(P, Np, eye, glR, glS, rpLightA10, rpLightB10, rpLightC10, gl, gd);
-        if (nL > 11) rpLightGlint(P, Np, eye, glR, glS, rpLightA11, rpLightB11, rpLightC11, gl, gd);
-        if (nL > 12) rpLightGlint(P, Np, eye, glR, glS, rpLightA12, rpLightB12, rpLightC12, gl, gd);
-        if (nL > 13) rpLightGlint(P, Np, eye, glR, glS, rpLightA13, rpLightB13, rpLightC13, gl, gd);
-        if (nL > 14) rpLightGlint(P, Np, eye, glR, glS, rpLightA14, rpLightB14, rpLightC14, gl, gd);
-        if (nL > 15) rpLightGlint(P, Np, eye, glR, glS, rpLightA15, rpLightB15, rpLightC15, gl, gd);
-        if (nL > 16) rpLightGlint(P, Np, eye, glR, glS, rpLightA16, rpLightB16, rpLightC16, gl, gd);
-        if (nL > 17) rpLightGlint(P, Np, eye, glR, glS, rpLightA17, rpLightB17, rpLightC17, gl, gd);
-        if (nL > 18) rpLightGlint(P, Np, eye, glR, glS, rpLightA18, rpLightB18, rpLightC18, gl, gd);
-        if (nL > 19) rpLightGlint(P, Np, eye, glR, glS, rpLightA19, rpLightB19, rpLightC19, gl, gd);
-        if (nL > 20) rpLightGlint(P, Np, eye, glR, glS, rpLightA20, rpLightB20, rpLightC20, gl, gd);
-        if (nL > 21) rpLightGlint(P, Np, eye, glR, glS, rpLightA21, rpLightB21, rpLightC21, gl, gd);
-        if (nL > 22) rpLightGlint(P, Np, eye, glR, glS, rpLightA22, rpLightB22, rpLightC22, gl, gd);
-        if (nL > 23) rpLightGlint(P, Np, eye, glR, glS, rpLightA23, rpLightB23, rpLightC23, gl, gd);
-        // Calibrated by the frame itself: the light the engine put on this spot (pre-exposed, in its own units) is the
-        // frame's brightness here over the asphalt's albedo; the darkest of 5 taps, so road paint and texture do not
-        // count. The film reflects that light in the lamps' directions: x (specular / diffuse) of the light model above.
-        // rpLightK.w: 1 at night, 0 by day (Lua; by day the sun lights the road, not the lamps).
-        float lumF = dot(src.rgb, float3(0.2126, 0.7152, 0.0722));
-        lumF = min(lumF, dot(rpLoadColor(p + int2(5, 0)), float3(0.2126, 0.7152, 0.0722)));
-        lumF = min(lumF, dot(rpLoadColor(p - int2(5, 0)), float3(0.2126, 0.7152, 0.0722)));
-        lumF = min(lumF, dot(rpLoadColor(p + int2(0, 4)), float3(0.2126, 0.7152, 0.0722)));
-        lumF = min(lumF, dot(rpLoadColor(p - int2(0, 4)), float3(0.2126, 0.7152, 0.0722)));
-        float lit = saturate(gd * 6000.0);                    // only where the listed lamps light the road (within ~30 m)
-        col += gl * (lumF / 0.12 / max(gd, 1e-7)) * (rpLightK.x * rpLightK.w * lit * wetGl);
-    }
 
     // ---- debug views ---------------------------------------------------------------------
     if (dbgMode > 0.5)

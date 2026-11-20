@@ -10,7 +10,7 @@
 --   road film        heavy rain makes the film smoother, more reflective and floods the road; drizzle stays damp
 --   tyre spray       more water on the road throws more spray
 --   snow             no rain from Rain Puddles (BeamNG.Earth draws its snow); wet slush above freezing
---   wind, clock      BeamNG.Earth sets them in the game, and ForeverWEATHER already follows the game's wind and lamps
+--   wind, clock      BeamNG.Earth sets them in the game, and ForeverWEATHER already follows the game's wind and clock
 -- The look values (road film, puddles, spray) are the player's own values scaled by the weather, so the player's taste
 -- stays. Everything goes through Rain Puddles' external weather API (setExternalWeather): nothing of it is saved, the
 -- player's values come back when BeamNG.Earth goes to Manual, the map is left, or either mod is switched off/unloaded.
@@ -34,7 +34,6 @@ local RP_SETTINGS_FILE = '/settings/rainPuddles.json'
 
 local RP_EXT = 'rainPuddles'
 local EARTH_EXT = 'beamngEarth_weather'
-local SKY_EXT = 'beamngEarth_sky'
 local EARTH_LEVEL_DEFAULT = 'beamng_earth'
 local EARTH_RAIN_DEFAULT = 'bngEarthRain'
 
@@ -172,15 +171,6 @@ local function earthMode(w)
   if type(w.getMode) ~= 'function' then return 'real' end
   local ok, mode = pcall(w.getMode)
   return ok and mode or nil
-end
-
--- BeamNG.Earth's clock: 'real' while it sets the time itself (Midnight's clock then stays off: a time change by another
--- mod would switch it to Manual)
-local function skyReal()
-  local sk = rawget(_G, SKY_EXT)
-  if type(sk) ~= 'table' or type(sk.getMode) ~= 'function' then return true end
-  local ok, mode = pcall(sk.getMode)
-  return not ok or mode ~= 'manual'
 end
 
 -- The rain BeamNG.Earth shows now, 0..1 (its share of the drop pool, sqrt(mm/h / 8), smoothed over a minute). rainNow
@@ -590,12 +580,12 @@ local function tick(dt)
     return
   end
 
-  local opts = { label = LABEL, noMidnightWet = (mode == 'real'), noMidnightClock = skyReal() }
+  local opts = { label = LABEL }
   if mode ~= 'real' then
-    -- BeamNG.Earth Manual: the player sets the weather. Only the clock rule stays (BeamNG.Earth's clock may be Real).
-    if st.engaged and st.sent and next(st.sent) ~= nil then st.sent = nil end
-    send(m, {}, opts, st.mode ~= mode)
-    st.engaged, st.mode, st.why = true, mode, 'BeamNG.Earth weather on Manual: the player sets it'
+    -- BeamNG.Earth Manual: the player sets the weather, so ForeverWEATHER gets its own values back.
+    -- (1.4: until 1.3.1 the bridge stayed engaged here only to keep Midnight's clock off; Midnight is gone.)
+    if st.engaged then release(m, w, 'BeamNG.Earth weather on Manual') end
+    st.mode, st.why = mode, 'BeamNG.Earth weather on Manual: the player sets it'
     restoreEarthRain(w)
     clearParticles()
     return
@@ -762,7 +752,7 @@ function M.status()
     level = levelId(),
     state = st.why,
     beamngEarth = w and {
-      onItsMap = isEarthLevel(w), mode = earthMode(w), clockReal = skyReal(), rainNow = w.rainNow,
+      onItsMap = isEarthLevel(w), mode = earthMode(w), rainNow = w.rainNow,
       code = msg and msg.code, rainMmH = msg and msg.rainMmH, snowCmH = msg and msg.snowCmH,
       tempC = msg and (msg.tempC or msg.slTempC), windMs = msg and msg.wind and msg.wind.ms, visM = msg and msg.visM,
       rainObject = o and (tostring(objName(o)) .. ' #' .. tostring(objId(o)) .. (isHiddenObj(o) and ' (hidden)' or ' (shown)'))
