@@ -106,23 +106,6 @@ float3 rpWindEnvRefl(float3 R, int2 p, float3 prk, float3 pra, float3 prb, float
     return res;
 }
 
-// 1.3: average brightness of the frame (8 fixed taps): the lamp sparks are scaled by it, since a post effect cannot read
-// the camera's exposure
-float rpWindFrameLuma()
-{
-    float s = 0.0;
-    [unroll]
-    for (int gy = 0; gy < 2; gy++)
-    {
-        [unroll]
-        for (int gx = 0; gx < 4; gx++)
-        {
-            s += rpLuma(rpWindLoad(int2(dispatchRect.xy + float2((float(gx) + 0.5) / 4.0, (float(gy) + 0.5) / 2.0) * dispatchRect.zw)));
-        }
-    }
-    return s / 8.0;
-}
-
 // 1.3: strength of a drop drawn at radV although it is only rawRad big. From the seat it fades (no sparkle from
 // sub-pixel drops). From outside only every (radV / rawRad)^2-th drop is drawn, at full strength: the glass keeps its
 // real wet coverage as distinct specks a viewer can see (enlarging them all made the glass one pale haze).
@@ -890,11 +873,11 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
                 }
             }
 
-            // Light catch (rpLightK.x, as the beads' 'Light catch'): the rim mirrors more where what it mirrors is much
+            // Light catch (rpWindU.x, as the beads' 'Light catch'): the rim mirrors more where what it mirrors is much
             // brighter than what is seen through the glass around the drop (the sky over the dark cabin from outside),
             // colour-neutral; elsewhere the drop keeps the plain 'Fresnel' and stays clear water.
             const float fresBaseK = max(rpWindF.y, 0.0);
-            const float catchK = max(rpLightK.x, 0.0);
+            const float catchK = max(rpWindU.x, 0.0);
             float lumEnv = max(env.r, max(env.g, env.b));
             // (the cabin behind the glass is always dark: a floor under it, and the rim never mirrors more than water)
             float lumBack = max(max(col.r, max(col.g, col.b)), 0.05);
@@ -932,31 +915,6 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
             dcol = dcol * (1.0 - fres) + envMix * fres;
             dcol += keyCol * (glint * 5.0 + soft * 0.35);
 
-            // Light catch at night: every lamp nearby shows in the drops as a tiny, sharp spark - from the seat the
-            // inverted image each drop makes of the lamps ahead (so the whole windshield glitters under street lights),
-            // from outside the lamps mirrored in the drops. Mostly white; relative to the frame's brightness.
-            const int nL = int(rpLightK.y + 0.5);
-            if (nL > 0 && catchK > 0.001 && rpLightK.w > 0.001 && (outside || dot(dOut, dOut) > 0.5))
-            {
-                float3 dirL = outside ? reflect(rd, nd) : dOut;
-                float kE = rpSparkExp(outside ? clamp(1.1 / radPx, 0.05, 0.35) : clamp(0.75 / radPx, 0.035, 0.35));
-                float3 sp = float3(0.0, 0.0, 0.0);
-                if (nL > 0) sp += rpLampSpark(Pw, dirL, kE, rpLightA0, rpLightB0, rpLightC0);
-                if (nL > 1) sp += rpLampSpark(Pw, dirL, kE, rpLightA1, rpLightB1, rpLightC1);
-                if (nL > 2) sp += rpLampSpark(Pw, dirL, kE, rpLightA2, rpLightB2, rpLightC2);
-                if (nL > 3) sp += rpLampSpark(Pw, dirL, kE, rpLightA3, rpLightB3, rpLightC3);
-                if (nL > 4) sp += rpLampSpark(Pw, dirL, kE, rpLightA4, rpLightB4, rpLightC4);
-                if (nL > 5) sp += rpLampSpark(Pw, dirL, kE, rpLightA5, rpLightB5, rpLightC5);
-                if (nL > 6) sp += rpLampSpark(Pw, dirL, kE, rpLightA6, rpLightB6, rpLightC6);
-                if (nL > 7) sp += rpLampSpark(Pw, dirL, kE, rpLightA7, rpLightB7, rpLightC7);
-                float through = outside ? min(fresPhys / 0.02, 6.0) : (1.0 - fresPhys);
-                float frameL = max(rpWindFrameLuma(), 1e-4);
-                float kS = catchK * saturate(rpLightK.w) * frameL / max(rpLightK.z, 1e-3) * RP_SPARK_GAIN
-                         * through * (outside ? smoothstep(0.4, 1.2, radPx) : smoothstep(0.8, 2.0, radPx));
-                // from the seat a spark is the lamp itself (its colour stays), mirrored ones are mostly white
-                float3 spC = lerp(rpLuma(sp).xxx, sp, outside ? 0.5 : 0.75) * kS;
-                dcol += spC * min(1.0, RP_SPARK_CAP * frameL / max(rpLuma(spC), 1e-6));
-            }
             col = lerp(col, dcol, cover);
         }
     }

@@ -143,26 +143,8 @@ float3 rpDropTap(float2 pos, float2 invSize)
     return colorTex.SampleLevel(dropTex_sampler_, (clamp(pos, lo, hi) + 0.5) * invSize, 0).rgb;
 }
 
-// (1.1 and 1.1.1 mirrored the street lamps in the beads here, and lit their rims with the frame's average light at night.
-// 1.2 took both out: the lamps coloured the beads far too strongly. 1.3 brings the lamps back as tiny, mostly white
-// sparks only - rpLampSpark in rp_lib.h.hlsl - and never tints the rims.)
-
-// 1.3: average brightness of the frame (8 fixed taps): the lamp sparks are scaled by it, since a post effect cannot read
-// the camera's exposure
-float rpFrameLuma()
-{
-    float s = 0.0;
-    [unroll]
-    for (int gy = 0; gy < 2; gy++)
-    {
-        [unroll]
-        for (int gx = 0; gx < 4; gx++)
-        {
-            s += rpLuma(rpDropLoad(int2(dispatchRect.xy + float2((float(gx) + 0.5) / 4.0, (float(gy) + 0.5) / 2.0) * dispatchRect.zw)));
-        }
-    }
-    return s / 8.0;
-}
+// (1.1 and 1.1.1 mirrored the street lamps in the beads here; 1.3 brought them back as tiny sparks. 1.4 took the lamp
+// sparks out for good: the beads show only what the frame shows, through the light catch rim.)
 
 PFX_NUMTHREADS
 void main(uint3 dispatchThreadID : SV_DispatchThreadID)
@@ -763,30 +745,6 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
             // raised by the light catch: a broader highlight washed out the bead's dark centre, tested in game)
             float soft = pow(saturate(dot(nd, Hk)), 40.0) * skyConf * saturate(thick * 2.0);
             dcol += keyCol * (glint * 5.0 + soft * 0.35);
-            // 1.3 light catch at night: every lamp nearby makes a tiny, sharp spark where the bead mirrors it (the rims
-            // above only catch light the frame shows; the lamps overhead are not on screen). Mostly white, a spot of
-            // about a pixel on beads bigger than ~2 px only, so far-away cars do not turn lamp-coloured as in 1.1.
-            const int nL = int(rpLightK.y + 0.5);
-            if (nL > 0 && catchK > 0.001 && rpLightK.w > 0.001)
-            {
-                float rPx = max(length(o1 - o0), 0.5);
-                float kE = rpSparkExp(clamp(1.1 / rPx, 0.05, 0.35));   // a point even on a 1-2 px bead (no colour wash)
-                float3 Rb = reflect(-V, nd);
-                float3 sp = float3(0.0, 0.0, 0.0);
-                if (nL > 0) sp += rpLampSpark(P, Rb, kE, rpLightA0, rpLightB0, rpLightC0);
-                if (nL > 1) sp += rpLampSpark(P, Rb, kE, rpLightA1, rpLightB1, rpLightC1);
-                if (nL > 2) sp += rpLampSpark(P, Rb, kE, rpLightA2, rpLightB2, rpLightC2);
-                if (nL > 3) sp += rpLampSpark(P, Rb, kE, rpLightA3, rpLightB3, rpLightC3);
-                if (nL > 4) sp += rpLampSpark(P, Rb, kE, rpLightA4, rpLightB4, rpLightC4);
-                if (nL > 5) sp += rpLampSpark(P, Rb, kE, rpLightA5, rpLightB5, rpLightC5);
-                if (nL > 6) sp += rpLampSpark(P, Rb, kE, rpLightA6, rpLightB6, rpLightC6);
-                if (nL > 7) sp += rpLampSpark(P, Rb, kE, rpLightA7, rpLightB7, rpLightC7);
-                float frameL = max(rpFrameLuma(), 1e-4);
-                float kS = catchK * saturate(rpLightK.w) * frameL / max(rpLightK.z, 1e-3) * RP_SPARK_GAIN
-                         * min(fresPhys / 0.02, 6.0) * smoothstep(0.4, 1.2, rPx);
-                float3 spC = lerp(rpLuma(sp).xxx, sp, 0.5) * kS;
-                dcol += spC * min(1.0, RP_SPARK_CAP * frameL / max(rpLuma(spC), 1e-6));   // no fireflies
-            }
             col = lerp(col, dcol, cover);
         }
     }

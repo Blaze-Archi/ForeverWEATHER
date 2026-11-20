@@ -26,7 +26,7 @@ local TAG = 'rainPuddles'
 -- shader file changed (measured: edited shaders kept running in their old form across restarts until that cache was
 -- cleared). A new path makes every player's game compile the 1.0 shaders instead of reusing cached 0.9 ones.
 -- Rename the folder again whenever the shaders change in a release.
-local shaderDir = 'shaders/common/postFx/rainPuddles42/'
+local shaderDir = 'shaders/common/postFx/rainPuddles43/'
 local maskDir = '/art/rainPuddles/'
 local wiperMaskPath = maskDir .. 'wiper_sweep.data.png'
 local settingsFile = '/settings/rainPuddles.json'
@@ -52,8 +52,6 @@ local SHADER_L = 'RainPuddles_LensShaderData'
 local FX_L     = 'RainPuddles_Lens'
 local SHADER_RAIN = 'RainPuddles_RainShaderData'
 local FX_RAIN  = 'RainPuddles_Rain'           -- 1.0: the mod's own falling rain (GPU), instead of BeamNG's particle rain
--- 1.0.1 Midnight (night street-racer look): its grade pass and the clock it holds at midnight (see 'Midnight' below)
-local MID = { fx = 'RainPuddles_Grade', shader = 'RainPuddles_GradeShaderData', clockOn = false, saved = nil, level = nil }
 -- 1.2: a new file name on purpose (the atlas grew to 4 x 8 tiles: elongated teardrops in row 4), so no cached
 -- conversion of the old 4 x 4 atlas is used
 local dropAtlasPath = maskDir .. 'droplet_atlas2.data.png'
@@ -132,23 +130,12 @@ local defaults = {
                              -- (the slope comes from the depth buffer, not the bumpy G-buffer normal; tyres use the same)
   puddleRoadsOnly = true,    -- 0.8: puddles only inside the lanes of the level's AI road network
   lightStreaks = 0.50,       -- 0.8: vertical streaks of light in wet-road reflections
-  lampHighlights = 1.0,      -- 1.0.2: at night the wet road shines under the street lamps (the level's own lights)
   stochasticGloss = false,   -- 0.8: GGX-sampled glossy reflections, smoothed by the game's temporal AA/upscaler. 1.0.1: off
                              -- again: in motion the upscaler cannot average the per-frame noise (grainy, flickering roads)
   drySim = true,             -- 0.8: the ground gets wet / dries over time instead of following the rain instantly
   wetUpTime = 25,            -- 0.8: seconds for the ground to get wet when rain starts (puddles take ~2.5x longer)
   dryTime = 6,               -- 0.8: minutes for the ground to dry after the rain (puddles last ~1.6x longer)
   followWeather = false,     -- 0.8: take the rain amount from the game's own weather (never touch its rain particles)
-  -- 1.0.1 Midnight: the night street-racer look (soaked streets, mirror reflections and light streaks, night grade)
-  midnight = false,          -- on: the streets stay soaked, the clock goes to midnight and the Midnight grade is drawn
-  midnightClock = true,      -- Midnight sets the clock to 00:00 and holds it (the old time comes back when it goes off)
-  midnightGrade = 0.85,      -- strength of the grade: teal shadows, sodium-orange highlights, contrast, vignette
-  midnightHaze = 0.55,       -- night air: haze in the colour of the city's light, thicker with distance
-  midnightGlow = 0.60,       -- soft glow around street lamps, headlights and neon
-  midnightTone = 0.0,       -- 1.1: 0 night film (calm colours, milky teal-grey blacks, warm-white lamps, the city's glow on
-                             -- the sky), 1 warm film (sepia highlights, more contrast: the first Midnight look)
-  midnightHalos = 0.60,      -- 1.1: halos of the nearest street lamps in the wet night air (and light cones under them)
-  moodOnLoad = false,        -- 1.1: a random moody weather (look, time of day, sun direction, haze) on every map load
   -- Reflection engine (0.5): native PBR + SSR chain
   reflectionMode = 0,        -- 0 Auto, 1 Native PBR + SSR only, 2 Own SSR only
   wetRoadMaterials = true,   -- lower road roughnessFactor while raining so engine reflections/SSR pick the road up
@@ -171,7 +158,7 @@ local defaults = {
   windshieldSize = 0.005,    -- 1.0: was 0.012 (3 cm drops on the glass)
   glassRefraction = 1.75,    -- 1.2: the glass drops' own lens strength. 1.3: the body drops' optics 1:1, same default
   glassFresnel = 0.12,       -- 1.2: the glass drops' mirror rim. 1.3: same meaning and default as the beads' (was 1.0)
-  glassLightCatch = 1.5,     -- 1.3: the glass drops' light catch (rim + the lamps' sparks at night), as the beads'
+  glassLightCatch = 1.5,     -- 1.3: the glass drops' light catch (the rim), as the beads'
   wiperAuto = true,          -- 1.0: rain-sensing (intermittent / normal / fast from the rain on the glass)
   windshieldOutside = true,  -- 1.0: the player's windshield rain also shows when looking at the car from outside
   rearGlass = true,          -- 1.0: drops on the rear / hatch glass of the player's car (from its glass mesh)
@@ -268,12 +255,6 @@ local ranges = {
   puddleMaxSlope = { 1, 30 },
   roadFlood = { 0, 1 },
   lightStreaks = { 0, 1 },
-  lampHighlights = { 0, 2 },
-  midnightGrade = { 0, 1.5 },
-  midnightHaze = { 0, 1 },
-  midnightGlow = { 0, 1 },
-  midnightTone = { 0, 1 },
-  midnightHalos = { 0, 1.5 },
   wetUpTime = { 1, 300 },
   dryTime = { 0.2, 60 },
   puddleFallback = { 0, 3 },
@@ -342,7 +323,7 @@ local boxes = {}
 local accelState = {}   -- [vehicle id] = last velocity + low-passed acceleration
 local frameDtSim = 0
 local frameId, camFrame = 0, -1
-local VERSION = '1.3.1'
+local VERSION = '1.4.0'
 local MAX_VEH_PUDDLES = 12   -- vehicles kept off the puddle / wet-ground pass (must match rp_puddles.h.hlsl)
 local MAX_VEH_DROPS = 6      -- vehicles with body droplets (must match rp_droplets.h.hlsl)
 local PROFILE_N = 16         -- roof-line samples per vehicle (must match rp_droplets.cs.hlsl)
@@ -583,23 +564,13 @@ local function loadSettings()
       S.stochasticGloss = false
     end
     if (tonumber(data.settingsVersion) or 0) < 22 then
-      -- 1.0.1: calmer wet look (the old one read as a mirror). Values still at the 1.0 defaults, or at the first Midnight
-      -- look's values while Midnight is on, move to the new ones; anything the player tuned is kept.
+      -- 1.0.1: calmer wet look (the old one read as a mirror). Values still at the 1.0 defaults move to the new ones;
+      -- anything the player tuned is kept.
       local oldDef = { roadReflection = 0.75, roadRoughness = 0.40, roadFlood = 0.20, roadDarkening = 0.38, puddleReflection = 0.68,
                        puddleRoughness = 0.16, puddleCoverage = 0.36, reflectionBlur = 0.45, roadReflectionBlur = 0.55 }
-      local oldMid = { roadReflection = 0.95, roadRoughness = 0.20, roadFlood = 0.45, puddleReflection = 0.88, puddleRoughness = 0.06,
-                       puddleCoverage = 0.46, reflectionBlur = 0.30, roadReflectionBlur = 0.35, lightStreaks = 1.00, roadNormal = 0.55 }
-      local newMid = { roadReflection = 0.60, roadRoughness = 0.46, roadFlood = 0.15, puddleReflection = 0.50, puddleRoughness = 0.20,
-                       puddleCoverage = 0.30, reflectionBlur = 0.45, roadReflectionBlur = 0.60, lightStreaks = 0.85, roadNormal = 0.65 }
       for k, v in pairs(oldDef) do
         local cur = tonumber(data[k])
         if cur == nil or math.abs(cur - v) < 1e-6 then S[k] = defaults[k] end
-      end
-      if data.midnight == true then
-        for k, v in pairs(oldMid) do
-          local cur = tonumber(data[k])
-          if cur ~= nil and math.abs(cur - v) < 1e-6 then S[k] = newMid[k] end
-        end
       end
     end
     if (tonumber(data.settingsVersion) or 0) < 17 then
@@ -615,20 +586,11 @@ local function loadSettings()
     if (tonumber(data.settingsVersion) or 0) < 23 then
       -- 1.0.2: the wet road reflects like rough wet asphalt now (its strength and blur follow the roughness; the 1.0
       -- curve mirrored the scene at 70-80 % in the distance whatever the roughness), so the old reflection values mean
-      -- something else. The ground and puddle reflection values start from the new look (the Midnight look's while
-      -- Midnight is on); coverage, wetness and everything else stay.
-      local new = (data.midnight == true)
-        and { roadReflection = 0.75, roadRoughness = 0.38, roadFlood = 0.20, roadDarkening = 0.55, roadReflectionBlur = 0.55,
-              reflectionBlur = 0.45, puddleReflection = 0.60, puddleRoughness = 0.16 }
-        or { roadReflection = 0.70, roadRoughness = 0.42, roadFlood = 0.15, roadDarkening = 0.50, roadReflectionBlur = 0.60,
-             reflectionBlur = 0.45, puddleReflection = 0.60, puddleRoughness = 0.18 }
+      -- something else. The ground and puddle reflection values start from the new look; coverage, wetness and
+      -- everything else stay.
+      local new = { roadReflection = 0.70, roadRoughness = 0.42, roadFlood = 0.15, roadDarkening = 0.50, roadReflectionBlur = 0.60,
+                    reflectionBlur = 0.45, puddleReflection = 0.60, puddleRoughness = 0.18 }
       for k, v in pairs(new) do S[k] = v end
-    end
-    if (tonumber(data.settingsVersion) or 0) < 24 then
-      -- 1.1: Midnight's Tone 0 is the new night film. The old default (1, warm film) moves to it; a tone the player
-      -- picked stays.
-      local tone = tonumber(data.midnightTone)
-      if tone == nil or math.abs(tone - 1) < 1e-6 then S.midnightTone = 0 end
     end
     if (tonumber(data.settingsVersion) or 0) < 25 then
       -- 1.1.1: puddles and the wet ground reach further. The old defaults move to the new ones, and a slider that was at
@@ -699,7 +661,7 @@ end
 -- Another mod that owns the weather (the BeamNG.Earth bridge: the real weather) can drive any of the settings for a
 -- while (M.setExternalWeather). Its values are what the mod uses; the player's own values stay what is saved and what
 -- comes back when it stops (M.clearExternalWeather) or the game closes, and a slider moved meanwhile is kept for then.
--- flags: noMidnightWet (Midnight's soaked streets give way to the real wetness), noMidnightClock (the time is not ours).
+-- flags: wetFloor (the least ground wetness without falling rain, e.g. slush under snow above freezing).
 local EXT = { src = nil, label = nil, base = {}, vals = {}, flags = {}, pushAt = -1e9 }
 
 local function saveSettings()
@@ -740,11 +702,9 @@ local function updateWetness(dtSim)
   wetSim.puddle = approach(wetSim.puddle, rain, up * 2.5, down * 1.6)
 end
 
--- 1.0.1 Midnight: the streets stay soaked whatever the rain does (a drizzle at most, wet asphalt and full puddles)
--- (1.0.2: not while an external weather source supplies the real wetness)
 -- (wetFloor: an external weather's wet road without falling rain, e.g. slush under snow above freezing)
-local function groundWetness() return clamp(math.max(wetSim.ground or S.rain, (S.midnight and not EXT.flags.noMidnightWet) and 0.9 or 0, EXT.flags.wetFloor or 0), 0, 1) end
-local function puddleWater() return clamp(math.max(wetSim.puddle or S.rain, (S.midnight and not EXT.flags.noMidnightWet) and 0.75 or 0, (EXT.flags.wetFloor or 0) * 0.8), 0, 1) end
+local function groundWetness() return clamp(math.max(wetSim.ground or S.rain, EXT.flags.wetFloor or 0), 0, 1) end
+local function puddleWater() return clamp(math.max(wetSim.puddle or S.rain, (EXT.flags.wetFloor or 0) * 0.8), 0, 1) end
 
 -- How puddle-like the ground is (0 = wet asphalt .. 1 = exactly the puddle look). Starts at a quarter wetness and
 -- rises slowly, so light rain stays wet asphalt and only sustained heavy rain floods the road.
@@ -2616,149 +2576,7 @@ local PRESETS = {
   flooded = { rain = 1.00, rainDropSize = 3.0, roadWetness = 1.00, roadRoughness = 0.30, roadReflection = 0.80, roadFlood = 0.60, roadNormal = 0.55,
               roadDarkening = 0.55, puddleCoverage = 0.58, puddleReflection = 0.70, puddleRoughness = 0.12, puddleRipple = 0.90,
               reflectionBlur = 0.40, roadReflectionBlur = 0.50, lightStreaks = 0.60 },
-  -- 1.0.1 Midnight: the night street-racer look. A fine drizzle over soaked, dark asphalt that mirrors every lamp, long
-  -- vertical light streaks, glassy puddles, the clock at midnight and the night grade (teal shadows, sodium highlights,
-  -- haze and glow around the lights)
-  midnight = { midnight = true, rain = 0.22, rainDropSize = 0.8, roadWetness = 1.00, roadRoughness = 0.38, roadReflection = 0.75,
-               roadFlood = 0.20, roadNormal = 0.65, roadDarkening = 0.55, roadVariation = 0.40, roadReflectionBlur = 0.55,
-               puddleCoverage = 0.32, puddleReflection = 0.60, puddleRoughness = 0.16, puddleRipple = 0.30,
-               reflectionBlur = 0.45, lightStreaks = 0.85, lampHighlights = 1.0, midnightTone = 0.0 },
 }
-
--- 1.0.1 Midnight clock: sets the level's clock to 00:00 and holds it while Midnight is on (and 'midnightClock'); the
--- time and play state it had come back when Midnight goes off. A new level starts over.
-function MID.update()
-  local env = core_environment
-  if not (env and type(env.getTimeOfDay) == 'function' and type(env.setTimeOfDay) == 'function') then return end
-  local live = rainSt.live()
-  local lvl = nil
-  pcall(function() lvl = getCurrentLevelIdentifier() end)
-  if lvl ~= MID.level then MID.level, MID.saved, MID.clockOn = lvl, nil, false end
-  local want = S.enabled and S.midnight and S.midnightClock and live and not EXT.flags.noMidnightClock   -- 1.0.2
-  if want and not MID.clockOn then
-    local ok, tod = pcall(env.getTimeOfDay)
-    if ok and type(tod) == 'table' then MID.saved = { time = tod.time, play = tod.play } end
-    pcall(env.setTimeOfDay, { time = 0.5, play = false })
-    MID.clockOn = true
-  elseif not want and MID.clockOn then
-    if MID.saved and live then pcall(env.setTimeOfDay, { time = MID.saved.time, play = MID.saved.play }) end
-    MID.clockOn, MID.saved = false, nil
-  end
-end
-
--- 1.1 random moody weather ---------------------------------------------------------------------------------------------
--- One click (or every map load, 'moodOnLoad') picks a look that photographs well in the rain - blue hour drizzle, a low
--- golden sun under storm clouds, a grey downpour, dawn mist or Midnight - with the time of day for it, the sun turned to a
--- random direction (the sky's north offset, as photo mode does) and haze to match; never the same look twice in a row.
--- The map's own sun direction and haze come back with clearMood(), on the next map and when the mod unloads.
--- nt: the game's normalised day (0 noon, 0.25 sunset, 0.5 solar midnight, 0.75 sunrise); fog x 0.001 = fog density.
-MID.MOODS = {
-  { key = 'bluehour', label = 'Blue hour drizzle', w = 22, preset = 'damp',     rain = { 0.28, 0.45 }, nt = { 0.252, 0.262 }, fog = { 1.0, 2.0 } },
-  { key = 'golden',   label = 'Golden storm',      w = 20, preset = 'storm',    rain = { 0.35, 0.55 }, nt = { 0.206, 0.236 }, fog = { 0.5, 1.0 } },
-  { key = 'downpour', label = 'Grey downpour',     w = 16, preset = 'flooded',  rain = { 0.85, 1.00 }, nt = { 0.120, 0.200 }, fog = { 1.4, 2.6 } },
-  { key = 'dawn',     label = 'Dawn mist',         w = 17, preset = 'wet',      rain = { 0.18, 0.35 }, nt = { 0.742, 0.790 }, fog = { 2.0, 3.6 } },
-  { key = 'midnight', label = 'Midnight',          w = 25, preset = 'midnight', rain = { 0.18, 0.32 }, fog = { 0.6, 1.4 } },
-}
-MID.mood = { level = nil, north0 = nil, fog0 = nil, last = nil, label = nil, auto = nil, wait = 0 }
-
-function MID.levelNow()
-  local lvl = nil
-  pcall(function() lvl = getCurrentLevelIdentifier() end)
-  return lvl
-end
-
-function MID.randomMood(key)
-  if EXT.src then
-    log('I', TAG, 'random mood: the weather comes from ' .. tostring(EXT.label or EXT.src) .. ' right now')
-    return false
-  end
-  if not rainSt.live() then return false end
-  local env = core_environment
-  local md = MID.mood
-  local lvl = MID.levelNow()
-  if md.level ~= lvl then md.level, md.north0, md.fog0 = lvl, nil, nil end
-  local pick = nil
-  for _, m in ipairs(MID.MOODS) do if m.key == key then pick = m end end
-  if not pick then
-    local total = 0
-    for _, m in ipairs(MID.MOODS) do if m.key ~= md.last then total = total + m.w end end
-    local r = math.random() * total
-    for _, m in ipairs(MID.MOODS) do
-      if m.key ~= md.last then
-        r = r - m.w
-        if r <= 0 then pick = m break end
-      end
-    end
-    pick = pick or MID.MOODS[1]
-  end
-  local function rnd(a) return a[1] + (a[2] - a[1]) * math.random() end
-  -- the look: Midnight on or off first (a Midnight that goes off gives back the clock it held), then rain and road
-  S.midnight = (pick.key == 'midnight')
-  pcall(MID.update)
-  M.applyPreset(pick.preset)
-  M.setSetting('rain', rnd(pick.rain))
-  wetSim.ground, wetSim.puddle = clamp(S.rain, 0, 1), clamp(S.rain, 0, 1)
-  -- the time of day (Midnight holds its own clock)
-  if pick.nt and env and type(env.setTimeOfDay) == 'function' then
-    local nt = rnd(pick.nt)
-    local t = nt
-    if type(env.getTimeOfDayValueForNormalizedTime) == 'function' then
-      local okT, v = pcall(env.getTimeOfDayValueForNormalizedTime, nt)
-      if okT and tonumber(v) and tonumber(v) >= 0 then t = tonumber(v) end
-    end
-    pcall(env.setTimeOfDay, { time = t, play = false })
-  end
-  -- the sun from another direction
-  local cel = rawget(_G, 'core_celestial')
-  if cel and type(cel.setNorthOffset) == 'function' and type(cel.getNorthOffset) == 'function' then
-    if md.north0 == nil then md.north0 = tonumber(cel.getNorthOffset()) or 0 end
-    pcall(cel.setNorthOffset, (md.north0 + math.random() * 360) % 360)
-  end
-  -- haze
-  if env and type(env.getFogDensity) == 'function' and type(env.setFogDensity) == 'function' then
-    if md.fog0 == nil then md.fog0 = tonumber((env.getFogDensity())) end
-    pcall(env.setFogDensity, rnd(pick.fog) * 0.001)
-  end
-  md.last, md.label = pick.key, pick.label
-  saveDirty = true
-  pcall(updateClouds)
-  pushSettings()
-  pcall(function() ui_message('ForeverWEATHER: ' .. pick.label, 4, 'rainPuddlesMood') end)
-  log('I', TAG, 'random mood: ' .. pick.label)
-  return pick.label
-end
-
-function MID.clearMood()
-  local md = MID.mood
-  local cel = rawget(_G, 'core_celestial')
-  if md.north0 ~= nil and cel and type(cel.setNorthOffset) == 'function' then pcall(cel.setNorthOffset, md.north0) end
-  local env = core_environment
-  if md.fog0 ~= nil and md.level == MID.levelNow() and env and type(env.setFogDensity) == 'function' then
-    pcall(env.setFogDensity, md.fog0)
-  end
-  md.north0, md.fog0, md.label = nil, nil, nil
-end
-
--- every 0.75 s: a new map gets the map's own sun direction back (the sky keeps its north offset across maps), and a
--- random mood a few seconds after it starts when 'moodOnLoad' is on
-function MID.moodUpdate()
-  local md = MID.mood
-  local lvl = MID.levelNow()
-  if md.level ~= lvl then
-    local cel = rawget(_G, 'core_celestial')
-    if md.north0 ~= nil and cel and type(cel.setNorthOffset) == 'function' then pcall(cel.setNorthOffset, md.north0) end
-    md.level, md.north0, md.fog0, md.label = lvl, nil, nil, nil
-  end
-  if not (S.enabled and S.moodOnLoad and lvl and rainSt.live()) then
-    md.wait = 0
-    return
-  end
-  if md.auto == lvl then return end
-  md.wait = md.wait + 0.75
-  if md.wait < 3 then return end
-  md.auto, md.wait = lvl, 0
-  MID.randomMood()
-end
 
 -- drop size (1.0) ------------------------------------------------------------------------------
 -- 'Rain droplet size' (mm, the size of the falling raindrops). The beads on the cars and on the glass and the falling
@@ -3328,174 +3146,15 @@ local function updateRoadSegments()
   end
 end
 
--- 1.0.2 lamp highlights -------------------------------------------------------------------------
--- At night a wet road shines under the street lamps: the water film reflects each lamp as a glossy highlight toward the
--- viewer. The screen-space trace cannot find the lamps (they hang above the top of the screen) and the engine shades the
--- road as dry asphalt, so the puddle pass draws them (rpLightGlint) for the 12 level lights nearest to the camera and
--- ahead of it. Their brightness is calibrated in the shader by the frame itself (the light the engine put on the road
--- there), so nothing here needs the exposure or the engine's light units. The positions of the level's lights are
--- cached a share per frame (big maps have thousands); colour, range and cone are read when a light is picked.
--- 1.1.1: 24 lamps up to 300 m ahead (was 12 within 140 m), a bright lamp counting as nearer than a dim one.
-local GLINT = { N = 24, list = {}, names = nil, idx = 0, done = false, level = nil, timer = 0, used = 0, night = 0,
-                strA = {}, strB = {}, strC = {}, k = '0 0 0.15 0', nA = {}, nB = {}, nC = {},
-                lum = {}, kAll = '0 0 0 0', meanI = 1, meanC = '1 1 1 0' }   -- 1.1, meanC 1.1.1
-for i = 1, GLINT.N do
-  GLINT.nA[i], GLINT.nB[i], GLINT.nC[i] = '$rpLightA' .. (i - 1), '$rpLightB' .. (i - 1), '$rpLightC' .. (i - 1)
-end
-
-function GLINT.scan()
-  if not GLINT.names then
-    local names = {}
-    for _, cls in ipairs({ 'SpotLight', 'PointLight' }) do
-      local ok, t = pcall(scenetree.findClassObjects, cls)
-      if ok and type(t) == 'table' then
-        for _, nm in ipairs(t) do names[#names + 1] = { nm, cls == 'SpotLight' } end
-      end
-    end
-    GLINT.names, GLINT.idx = names, 0
-  end
-  local names = GLINT.names
-  local stop = math.min(#names, GLINT.idx + 400)
-  for i = GLINT.idx + 1, stop do
-    local o = scenetree.findObject(names[i][1])
-    if o then
-      local okP, p = pcall(function() return o:getPosition() end)
-      if okP and p then GLINT.list[#GLINT.list + 1] = { id = o:getID(), x = p.x, y = p.y, z = p.z, spot = names[i][2] } end
-    end
-  end
-  GLINT.idx = stop
-  if stop >= #names then GLINT.done, GLINT.names = true, nil end
-end
-
-function GLINT.info(l)
-  if l.info ~= nil and T - (l.at or -1e9) < 3 then return l.info end
-  l.at = T
-  local o = scenetree.findObjectById(l.id)
-  if not o then l.info = false return false end
-  local function num(f)
-    local ok, v = pcall(function() return o:getField(f, 0) end)
-    return ok and tonumber(v) or nil
-  end
-  local r, g, b = 1, 1, 1
-  local okC, col = pcall(function() return o:getField('color', 0) end)
-  if okC and type(col) == 'string' then
-    local c1, c2, c3 = col:match('^%s*(%S+)%s+(%S+)%s+(%S+)')
-    r, g, b = tonumber(c1) or 1, tonumber(c2) or 1, tonumber(c3) or 1
-  end
-  local br = num('brightness') or 1
-  local t = { on = (num('isEnabled') or 1) ~= 0, r = r * br, g = g * br, b = b * br,
-              range = num('range') or num('radius') or 20 }
-  if l.spot then
-    local okF, f = pcall(function() return o:getTransform():getForward() end)
-    if okF and f then t.ax, t.ay, t.az = f.x, f.y, f.z else t.ax, t.ay, t.az = 0, 0, -1 end
-    t.ci = math.cos(math.rad((num('innerAngle') or 45) * 0.5))
-    t.co = math.cos(math.rad((num('outerAngle') or 90) * 0.5))
-  end
-  l.info = t
-  return t
-end
-
--- 1 at night, 0 by day (by day the sun lights the road, not the lamps): the clock, 0 = noon .. 0.5 = midnight
-function GLINT.nightFactor()
+-- 1 at night, 0 by day (by day the sky lights the tyre spray, at night the lights on screen do): from the clock,
+-- 0 = noon .. 0.5 = midnight
+local function nightFactor()
   local envc = core_environment
   if not (envc and type(envc.getTimeOfDay) == 'function') then return 1 end
   local ok, tod = pcall(envc.getTimeOfDay)
   local t = ok and type(tod) == 'table' and tonumber(tod.time) or nil
   if not t then return 1 end
   return clamp((0.15 - math.cos(2 * math.pi * t)) / 0.35, 0, 1)
-end
-
-function GLINT.off()
-  GLINT.used, GLINT.k, GLINT.kAll, GLINT.meanI, GLINT.meanC = 0, '0 0 0.15 0', '0 0 0 0', 1, '1 1 1 0'
-end
-
--- 1.1: the lamps are listed for whoever uses them: the wet road's highlights (GLINT.k: count 0 while they are off) and
--- Midnight's halos (GLINT.kAll). (1.1 and 1.1.1 also sparkled them on the beads of the cars; 1.2 took that out.)
-function GLINT.update(dt)
-  local lvl = nil
-  pcall(function() lvl = getCurrentLevelIdentifier() end)
-  if lvl ~= GLINT.level then
-    GLINT.level, GLINT.list, GLINT.names, GLINT.idx, GLINT.done = lvl, {}, nil, 0, false
-    GLINT.off()
-  end
-  local road = S.wetGround and (S.lampHighlights or 0) > 0.001
-  local drops = (S.droplets or S.windshield) and S.rain > 0.001   -- 1.3: the beads' and the glass drops' sparks
-  local halos = S.midnight and (S.midnightHalos or 0) > 0.001 and (S.midnightGrade or 0) > 0.001
-  if not (S.enabled and (road or drops or halos) and lvl and rainSt.live()) then
-    GLINT.off()
-    return
-  end
-  if not GLINT.done then GLINT.scan() end
-  GLINT.timer = GLINT.timer + (tonumber(dt) or 0)
-  if GLINT.timer < 0.3 then return end
-  GLINT.timer = 0
-  GLINT.night = GLINT.nightFactor()
-  if GLINT.night <= 0.001 then GLINT.off() return end
-  local okP, p = pcall(core_camera.getPosition)
-  local okF, fw = pcall(core_camera.getForward)
-  if not (okP and p and okF and fw) then GLINT.off() return end
-  local near = {}
-  for _, l in ipairs(GLINT.list) do
-    local dx, dy, dz = l.x - p.x, l.y - p.y, l.z - p.z
-    local d2 = dx * dx + dy * dy + dz * dz
-    -- lamps ahead of the camera make the highlights you see; the ones far behind it light road out of view
-    if d2 < 90000 and dx * fw.x + dy * fw.y + dz * fw.z > -12 then near[#near + 1] = { l, d2 } end
-  end
-  table.sort(near, function(a, b) return a[2] < b[2] end)
-  -- 1.1.1: of the 64 nearest, a brighter lamp counts as nearer (it shows from further away), then the first 24
-  local pick = {}
-  for i = 1, math.min(#near, 64) do
-    local t = GLINT.info(near[i][1])
-    if t and t.on and t.r + t.g + t.b > 0.01 then
-      local lum = 0.2126 * t.r + 0.7152 * t.g + 0.0722 * t.b
-      local w = clamp(math.sqrt(math.max(lum, 0) / 0.3), 0.5, 2.0)
-      pick[#pick + 1] = { near[i][1], t, near[i][2] / (w * w), lum }
-    end
-  end
-  table.sort(pick, function(a, b) return a[3] < b[3] end)
-  local n = 0
-  local sr, sg, sb, sl = 0, 0, 0, 0
-  for _, e in ipairs(pick) do
-    if n >= GLINT.N then break end
-    local l, t = e[1], e[2]
-    do
-      n = n + 1
-      GLINT.lum[n] = e[4]
-      sr, sg, sb, sl = sr + t.r, sg + t.g, sb + t.b, sl + e[4]
-      GLINT.strA[n] = string.format('%.3f %.3f %.3f %.2f', l.x, l.y, l.z, t.range)
-      if l.spot then
-        GLINT.strB[n] = string.format('%.4f %.4f %.4f %.4f', t.r, t.g, t.b, t.ci)
-        GLINT.strC[n] = string.format('%.4f %.4f %.4f %.4f', t.ax, t.ay, t.az, t.co)
-      else
-        GLINT.strB[n] = string.format('%.4f %.4f %.4f 2', t.r, t.g, t.b)
-        GLINT.strC[n] = '0 0 0 -1'
-      end
-    end
-  end
-  GLINT.used = n
-  -- mean intensity (luma of colour x brightness) of the listed lamps: halos and sparkles are relative to it
-  local sumI = 0
-  for i = 1, n do sumI = sumI + GLINT.lum[i] end
-  GLINT.meanI = (n > 0) and math.max(sumI / n, 1e-3) or 1
-  -- 1.1.1: their mean colour (luma 1): Midnight's city glow on the sky takes it (warm under sodium, cool under white lamps)
-  GLINT.meanC = (sl > 1e-6) and string.format('%.4f %.4f %.4f 0', sr / sl, sg / sl, sb / sl) or '1 1 1 0'
-  local roadOn = road and groundWetness() > 0.02
-  GLINT.k = string.format('%.4f %d 0.15 %.3f', roadOn and 3.0 * clamp(S.lampHighlights or 1, 0, 2) or 0, roadOn and n or 0, GLINT.night)
-  GLINT.kAll = string.format('1 %d 0 %.3f', n, GLINT.night)
-end
-
--- nMax (1.3): the drop passes declare only the 8 nearest lamps
-function GLINT.setConsts(fx, k, nMax)
-  for i = 1, nMax or GLINT.N do
-    if i <= GLINT.used then
-      fx:setShaderConst(GLINT.nA[i], GLINT.strA[i])
-      fx:setShaderConst(GLINT.nB[i], GLINT.strB[i])
-      fx:setShaderConst(GLINT.nC[i], GLINT.strC[i])
-    else
-      fx:setShaderConst(GLINT.nB[i], '0 0 0 0')
-    end
-  end
-  fx:setShaderConst('$rpLightK', k or GLINT.k)
 end
 
 local function puddleConsts(fx)
@@ -3529,7 +3188,6 @@ local function puddleConsts(fx)
   fx:setShaderConst('$rpPuddleK', fmt4(floodAmount(), clamp(S.rain, 0, 1), roadsMode, #roads.segs))
   fx:setShaderConst('$rpPuddleL', fmt4(S.lightStreaks, S.stochasticGloss and 1 or 0, frameId % 1024, 0))
   fx:setShaderConst('$rpPuddleM', fmt4(S.tyreWakes, #wheels, 0, 0))
-  GLINT.setConsts(fx)                                             -- 1.0.2 lamp highlights
   setTyreConsts(fx)
   rainSt.setConsts(fx)                                            -- 1.0: dry under roofs / in tunnels
   for i = 0, ROAD_SEGS - 1 do
@@ -3546,12 +3204,8 @@ local function dropletConsts(fx)
   fx:setShaderConst('$rpDropA', fmt4(density, S.dropletSize * dropScale(), S.dropletRefraction, S.dropletSpeed))
   fx:setShaderConst('$rpDropB', fmt4(S.dropletShell, S.dropletSheen, S.dropletMaxDistance, rain))
   fx:setShaderConst('$rpDropC', fmt4(S.dropletSlide, S.dropletAero, 1.0, S.dropletInertia))
-  -- 1.2: the street lamps no longer colour the beads (1.1's lamp sparkles and 1.1's city-glow rims are gone: too strong)
   fx:setShaderConst('$rpDropD', fmt4(S.dropletRunners, S.dropletTrails, S.dropletFresnel or defaults.dropletFresnel,
     S.dropletLightCatch or defaults.dropletLightCatch))   -- 1.2.1 w: light catch
-  -- 1.3 light catch at night: the 8 nearest lamps spark on the beads (rpLightK: catch, count, mean intensity, night)
-  GLINT.setConsts(fx, fmt4(S.dropletLightCatch or defaults.dropletLightCatch, math.min(GLINT.used, 8), GLINT.meanI,
-    GLINT.night), 8)
 end
 
 -- camera lens droplets ---------------------------------------------------------------------
@@ -3639,32 +3293,6 @@ local function lensConsts(fx)
   fx:setShaderConst('$rpLensG', fmt4(dF[9], dF[10], dF[11], dF[12]))
 end
 
--- 1.0.1 Midnight grade (rp_grade.cs.hlsl)
-function MID.consts(fx)
-  setCommon(fx)
-  local k = (S.enabled and S.midnight) and S.midnightGrade or 0
-  -- 'Tone' blends two tunings: 0 night film (1.1, after a frame study of the 2015-era street-racing night city: calm
-  -- colours, the city's warm light pulled toward teal-grey, milky teal-grey blacks, warm-white lamps, a glow on the
-  -- overcast sky) and 1 warm film (the first Midnight look: strong sepia highlights, contrast, a dark vignette)
-  local w = clamp(tonumber(S.midnightTone) or 0, 0, 1)
-  local function mix(warm, film) return film + (warm - film) * w end
-  local haze = clamp(S.midnightHaze or 0, 0, 1)
-  fx:setShaderConst('$rpGradeA', fmt4(k, S.midnightHaze, mix(0.60, 0.46), S.midnightGlow))
-  -- shadows -> teal, the lights' own colour a little stronger (1.1.1: was a fixed push of the highlights toward sodium
-  -- orange, which turned cool lamps orange too), contrast, saturation of the surroundings
-  fx:setShaderConst('$rpGradeB', fmt4(mix(0.75, 1.00), mix(0.25, 0.15), mix(0.16, 0.08), mix(0.82, 0.48)))
-  -- shadow lift (share of the frame average), exposure (EV), haze cooled toward night blue
-  fx:setShaderConst('$rpGradeC', fmt4(mix(0.02, 0.20), mix(0.0, 0.22), mix(0.55, 0.45), 0))
-  -- 1.1: lamp halos (thicker in the haze and the heavier the rain), mean lamp intensity, the city's glow on the sky
-  local halo = clamp(S.midnightHalos or 0, 0, 1.5) * (0.4 + 0.6 * haze) * (0.8 + 0.4 * clamp(S.rain, 0, 1))
-  -- 1.1.1: halos a little weaker (0.75, was 0.9) now that 24 lamps reach further; far ones dim in the haze
-  fx:setShaderConst('$rpGradeD', fmt4((GLINT.used > 0) and 0.75 * halo or 0, GLINT.meanI or 1, mix(0.0, 0.9) * haze, 0.0045 * haze))
-  fx:setShaderConst('$rpGradeF', GLINT.meanC or '1 1 1 0')
-  -- colour of the shadow lift: blue (warm film), milky teal-grey (night film)
-  fx:setShaderConst('$rpGradeE', fmt4(mix(0.12, 0.34), mix(0.55, 0.62), mix(1.0, 0.72), 0))
-  GLINT.setConsts(fx, GLINT.kAll)
-end
-
 local WIPER = { park = 0.06, range = 1.75 }   -- tandem blades: parked pointing right, sweep ~100 deg up to the left
 
 -- Constants for one pane of glass (1.0: the windshield, and the rear / hatch glass through a second pass of the same
@@ -3714,9 +3342,8 @@ local function glassConsts(fx, W, flow, wip)
   -- 1.2: y = the glass drops' Fresnel (mirror rim), w = their own refraction (the body drops' 'Refraction' before)
   fx:setShaderConst('$rpWindF', fmt4(S.wiperTrail, S.glassFresnel or defaults.glassFresnel, rain,
     S.glassRefraction or defaults.glassRefraction))
-  -- 1.3 light catch of the glass drops; at night the 8 nearest lamps spark in them (rpLightK as the beads')
-  GLINT.setConsts(fx, fmt4(S.glassLightCatch or defaults.glassLightCatch, math.min(GLINT.used, 8), GLINT.meanI,
-    GLINT.night), 8)
+  -- 1.3 light catch of the glass drops (as the beads')
+  fx:setShaderConst('$rpWindU', fmt4(S.glassLightCatch or defaults.glassLightCatch, 0, 0, 0))
   fx:setShaderConst('$rpWindG', fmt4(flow.speed, active, cam.aspect, outside and 1 or 0))
   fx:setShaderConst('$rpWindH', fmt4(WIPER.park, WIPER.range, flow.clock, flow.rateHold or flow.rate))
   -- z: 0 estimated plane, 1 ray probe, 2 real outline (jbeam frame or the glass mesh) in rpWindJ / K / P (1.0)
@@ -3785,8 +3412,8 @@ local function splashConsts(fx)
   fx:setShaderConst('$rpSplashA', fmt4(S.splashIntensity, S.splashSize, S.splashSpeedMin, groundWetness()))
   fx:setShaderConst('$rpSplashB', fmt4(cov, S.puddleSoftness, S.tileSize, S.splashPuddle))
   fx:setShaderConst('$rpSplashC', fmt4(water, S.maxDistance, size, clamp(S.rain, 0, 1)))
-  -- 1.3: at night the spray is lit by the lights around it (street lamps, tail lights), by day by the sky
-  fx:setShaderConst('$rpSplashD', fmt4(GLINT.nightFactor(), 0, 0, 0))
+  -- 1.3: at night the spray is lit by the lights on screen around it (street lamps, tail lights), by day by the sky
+  fx:setShaderConst('$rpSplashD', fmt4(nightFactor(), 0, 0, 0))
   setTyreConsts(fx)
 end
 
@@ -3826,8 +3453,7 @@ local function maskPath(index)
 end
 
 local function deleteObjects()
-  local names = { FX_L, FX_S, FX_R, FX_W, FX_RAIN, FX_D, FX_P, BLOCK, SIDE.fxL, SIDE.fxR, SHADER_L, SHADER_S, SHADER_W, SHADER_RAIN, SHADER_D, SHADER_P,
-                  MID.fx, MID.shader }
+  local names = { FX_L, FX_S, FX_R, FX_W, FX_RAIN, FX_D, FX_P, BLOCK, SIDE.fxL, SIDE.fxR, SHADER_L, SHADER_S, SHADER_W, SHADER_RAIN, SHADER_D, SHADER_P }
   for _, n in ipairs(PROBES) do
     names[#names + 1] = 'RainPuddles_ProbeFx' .. n
     names[#names + 1] = 'RainPuddles_ProbeShader' .. n
@@ -3858,14 +3484,12 @@ local function applyEnabled()
   local wantS = on and S.splashes
   local wantL = on and S.lens and (not cam.cockpit or S.lensInCockpit)
   local wantRain = on and S.rainStreaks and S.rain > 0.01                -- 1.0 own falling rain
-  local wantG = on and S.midnight and S.midnightGrade > 0.001           -- 1.0.1 Midnight grade
   local key = tostring(wantP) .. tostring(wantD) .. tostring(wantW) .. tostring(wantS) .. tostring(wantL) .. tostring(wantR)
-    .. tostring(wantRain) .. tostring(wantSL) .. tostring(wantSR) .. tostring(wantG)
+    .. tostring(wantRain) .. tostring(wantSL) .. tostring(wantSR)
   if enabledCache == key then return end
   enabledCache = key
   skipEffect(FX_L, not wantL)
   skipEffect(FX_RAIN, not wantRain)
-  skipEffect(MID.fx, not wantG)
 
   skipEffect(FX_P, not wantP)
   skipEffect(FX_D, not wantD)
@@ -3890,7 +3514,6 @@ local function createObjects()
     { SHADER_S, 'rp_splashes.cs.hlsl', splashConsts },
     { SHADER_L, 'rp_lens.cs.hlsl', lensConsts },
     { SHADER_RAIN, 'rp_rain.cs.hlsl', rainConsts },
-    { MID.shader, 'rp_grade.cs.hlsl', MID.consts },
   }
   for _, n in ipairs(PROBES) do
     shaderDefs[#shaderDefs + 1] = { 'RainPuddles_ProbeShader' .. n, 'rp_probe' .. n .. '.cs.hlsl', puddleConsts }
@@ -3938,11 +3561,9 @@ local function createObjects()
     { FX_S, SHADER_S, '97',  { '$backBuffer', '#prepass[Depth]', maskPath(S.maskA), maskPath(S.maskB) } },
     -- last: the lens sits on top of everything (slot 2 = linear sampler for the droplet atlas)
     { FX_L, SHADER_L, '96',  { '$backBuffer', maskPath(S.maskA), dropAtlasPath } },
-    -- 1.0.1 Midnight grade: after the upscaler and after the falling rain, at full resolution
-    { MID.fx, MID.shader, '90', { '#prepass[RT0]', '#prepass[Depth]', '$backBuffer' }, 'UpscaleOverlay' },
   }
   local constSetters = { [FX_P] = puddleConsts, [FX_D] = dropletConsts, [FX_W] = windshieldConsts, [FX_R] = rearGlassConsts,
-                         [FX_S] = splashConsts, [FX_L] = lensConsts, [FX_RAIN] = rainConsts, [MID.fx] = MID.consts,
+                         [FX_S] = splashConsts, [FX_L] = lensConsts, [FX_RAIN] = rainConsts,
                          [SIDE.fxL] = function(fx) glassConsts(fx, SIDE.L, SIDE.flowL, nil) end,
                          [SIDE.fxR] = function(fx) glassConsts(fx, SIDE.R, SIDE.flowR, nil) end }
   for _, n in ipairs(PROBES) do
@@ -4353,11 +3974,6 @@ local function onExtensionLoaded()
 end
 
 local function onExtensionUnloaded()
-  if MID.clockOn and MID.saved and core_environment and type(core_environment.setTimeOfDay) == 'function' then
-    pcall(core_environment.setTimeOfDay, { time = MID.saved.time, play = MID.saved.play })   -- 1.0.1: the clock back
-  end
-  MID.clockOn = false
-  pcall(MID.clearMood)                                              -- 1.1 the map's own sun direction and haze
   pcall(env.destroy)
   restoreClouds()
   restoreAllWiperMeshes()
@@ -4376,8 +3992,6 @@ local function onUpdate(dtReal, dtSim, dtRaw)
   updateWiper(dt)
   updateRearWiper()
   wetCall('update', dt, groundWetness(), S, floodAmount(), rainSt.dryNear)
-  local okG, errG = pcall(GLINT.update, dt)                       -- 1.0.2 lamp highlights
-  if not okG then warnOnce('lamp_highlights', 'lamp highlights failed: ' .. tostring(errG)) end
   sinceCheck = sinceCheck + dt
   precipTimer = precipTimer + dt
 
@@ -4403,10 +4017,6 @@ local function onUpdate(dtReal, dtSim, dtRaw)
     updateCamera()
     updatePrecipitation()
     pcall(updateClouds)
-    local okM, errM = pcall(MID.update)                   -- 1.0.1 Midnight clock
-    if not okM then warnOnce('midnight_clock', 'Midnight clock failed: ' .. tostring(errM)) end
-    local okMo, errMo = pcall(MID.moodUpdate)             -- 1.1 random moody weather
-    if not okMo then warnOnce('random_mood', 'random mood failed: ' .. tostring(errMo)) end
     applyEnabled()
   end
 end
@@ -4492,7 +4102,6 @@ M.setSetting = function(key, value)
   end
   S[key] = value
   saveDirty = true
-  if key == 'midnight' or key == 'midnightClock' or key == 'enabled' then pcall(MID.update) end   -- 1.0.1
 
   if key == 'maskA' or key == 'maskB' then
     rebuild()
@@ -4511,7 +4120,7 @@ M.getSettings = function()
 end
 
 -- 1.0.2 external weather (see EXT). values: { setting = number | boolean }; opts: { label = text shown in the panel,
--- noMidnightWet = true, noMidnightClock = true, wetFloor = 0..1 (the least ground wetness, without rain) }. A key left out of a later call goes back to the player's value. Returns
+-- wetFloor = 0..1 (the least ground wetness, without rain) }. A key left out of a later call goes back to the player's value. Returns
 -- true, or false and why (another source holds the weather).
 M.setExternalWeather = function(src, values, opts)
   if type(src) ~= 'string' or src == '' or type(values) ~= 'table' then return false, 'bad arguments' end
@@ -4519,8 +4128,7 @@ M.setExternalWeather = function(src, values, opts)
   opts = (type(opts) == 'table') and opts or {}
   local first = (EXT.src == nil)
   EXT.src, EXT.label = src, tostring(opts.label or src)
-  EXT.flags = { noMidnightWet = opts.noMidnightWet == true, noMidnightClock = opts.noMidnightClock == true,
-                wetFloor = clamp(tonumber(opts.wetFloor) or 0, 0, 1) }
+  EXT.flags = { wetFloor = clamp(tonumber(opts.wetFloor) or 0, 0, 1) }
   local touched, precip, switch = {}, false, first
   for k, v in pairs(values) do
     local def = defaults[k]
@@ -4552,7 +4160,6 @@ M.setExternalWeather = function(src, values, opts)
   end
   if precip then updatePrecipitation() end
   if switch then
-    pcall(MID.update)
     applyEnabled()
   end
   if switch or T - EXT.pushAt > 1.0 then
@@ -4567,7 +4174,6 @@ M.clearExternalWeather = function(src)
   for k, v in pairs(EXT.base) do S[k] = v end
   EXT.src, EXT.label, EXT.base, EXT.vals, EXT.flags = nil, nil, {}, {}, {}
   updatePrecipitation()
-  pcall(MID.update)
   applyEnabled()
   pushSettings()
   return true
@@ -4627,9 +4233,6 @@ M.getDiagnostics = function()
     flood = floodAmount(),
     roads = { mode = S.puddleRoadsOnly and roads.mode or 0, segments = #roads.segs, nodes = roads.nodes },
     weather = { following = S.followWeather and true or false, objects = weather.objects, drops = weather.drops },
-    lamps = { used = GLINT.used, cached = #GLINT.list, scanning = not GLINT.done, night = GLINT.night,   -- 1.0.2
-              meanI = GLINT.meanI },                                                                -- 1.1
-    mood = MID.mood.label,                                                                            -- 1.1
     external = M.getExternalWeather(),                                                                  -- 1.0.2
     windshield = (function()
       local gmx = playerBox and glassMesh[playerBox.id]
@@ -4888,7 +4491,6 @@ M.applyPreset = function(name)
   end
   saveDirty = true
   wetSim.ground, wetSim.puddle = clamp(S.rain, 0, 1), clamp(S.rain, 0, 1)   -- show the look now, no wet-up wait
-  pcall(MID.update)                                                          -- 1.0.1 Midnight clock
   updateCamera()
   updatePrecipitation()
   pcall(updateClouds)
@@ -4897,24 +4499,11 @@ M.applyPreset = function(name)
   return true
 end
 
--- 1.1 Console / UI: extensions.rainPuddles.randomMood() - a random moody weather; randomMood('bluehour' | 'golden' |
--- 'downpour' | 'dawn' | 'midnight') picks one. clearMood() gives the map's own sun direction and haze back.
-M.randomMood = function(key)
-  local ok, res = pcall(MID.randomMood, key)
-  if not ok then
-    log('W', TAG, 'random mood failed: ' .. tostring(res))
-    return false
-  end
-  return res
-end
-M.clearMood = function() pcall(MID.clearMood) end
-
--- 1.1 for other mods (Speed Film FX's rain mood): how hard it rains now, how wet the road is, whether Midnight's grade is
--- drawn (0 / false while the mod is off or no level runs)
+-- 1.1 for other mods (Speed Film FX's rain mood): how hard it rains now and how wet the road is (0 while the mod is off
+-- or no level runs). 1.4: Midnight is gone, so 'midnight' is always false.
 M.getRainNow = function()
   local on = S.enabled and rainSt.live()
-  return { rain = on and clamp(S.rain, 0, 1) or 0, wet = on and groundWetness() or 0,
-           midnight = (on and S.midnight and (S.midnightGrade or 0) > 0.001) and true or false }
+  return { rain = on and clamp(S.rain, 0, 1) or 0, wet = on and groundWetness() or 0, midnight = false }
 end
 
 -- Console / UI: extensions.rainPuddles.snapWetness() - skip the wet-up / drying time (ground = current rain now)

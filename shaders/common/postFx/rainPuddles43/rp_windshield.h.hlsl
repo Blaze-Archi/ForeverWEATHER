@@ -45,17 +45,7 @@ cbuffer perDraw : register(b0)
     uniform float4 rpWindM;    // 1.0 glass bulge along the normal (m): k0 + k1*b + (k2 + k3*b)*a^2, a/b glass metres
     uniform float4 rpWindP0; uniform float4 rpWindP1; uniform float4 rpWindP2;   // outline corners, 2 per float4,
     uniform float4 rpWindP3; uniform float4 rpWindP4; uniform float4 rpWindP5;   // glass uv, counter-clockwise
-    // 1.3 light catch at night: the 8 lamps of the level nearest to the camera (as in the puddle pass) and
-    // rpLightK: x glass light catch, y number of lamps, z their mean intensity, w night (0 by day .. 1)
-    uniform float4 rpLightA0; uniform float4 rpLightB0; uniform float4 rpLightC0;
-    uniform float4 rpLightA1; uniform float4 rpLightB1; uniform float4 rpLightC1;
-    uniform float4 rpLightA2; uniform float4 rpLightB2; uniform float4 rpLightC2;
-    uniform float4 rpLightA3; uniform float4 rpLightB3; uniform float4 rpLightC3;
-    uniform float4 rpLightA4; uniform float4 rpLightB4; uniform float4 rpLightC4;
-    uniform float4 rpLightA5; uniform float4 rpLightB5; uniform float4 rpLightC5;
-    uniform float4 rpLightA6; uniform float4 rpLightB6; uniform float4 rpLightC6;
-    uniform float4 rpLightA7; uniform float4 rpLightB7; uniform float4 rpLightC7;
-    uniform float4 rpLightK;
+    uniform float4 rpWindU;    // 1.3 x light catch of the glass drops (as the beads' rpDropD.w), yzw unused
 
     // Lighting globals the engine binds BY NAME. The Vulkan shader path does not declare them for us (the working
     // droplets header declares them for the same reason); without them rpSkyColor() fails to compile and the whole

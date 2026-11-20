@@ -18,7 +18,6 @@ export const PRESETS = [
   { k: "wet", l: "Wet" },
   { k: "storm", l: "Storm" },
   { k: "flooded", l: "Flooded" },
-  { k: "midnight", l: "Midnight" },
 ]
 
 // 1.0 hydroplaning (node-based, see lua/vehicle/extensions/rainPuddlesHydroVeh.lua)
@@ -84,8 +83,7 @@ export const SLIDERS = {
   groundReflBoth: [
     { k: "roadReflection", l: "Reflection strength", a: 0, b: 1, st: 0.01, d: 2, hint: "How reflective the wet road gets. BeamNG's own reflections: how much glossier the road materials become. Own trace: the reflectance." },
     { k: "roadFlood", l: "Puddle-like at max rain", a: 0, b: 1, st: 0.01, d: 2, hint: "As the ground gets wetter it turns into the puddle look: 1 = exactly the puddle settings at full rain, 0 = always wet asphalt." },
-    { k: "lightStreaks", l: "Light streaks", a: 0, b: 1, st: 0.01, d: 2, hint: "Vertical streaks of lights in wet-road reflections (mod's trace), and how far the street lamps' highlights stretch toward you on rough wet asphalt (up to 5x at low angles). Deep puddles keep a sharp mirror image." },
-    { k: "lampHighlights", l: "Lamp highlights (night)", a: 0, b: 2, st: 0.05, d: 2, hint: "At night the wet road shines under the street lamps (the map's own lights, up to 24 of them, in their own colours)." },
+    { k: "lightStreaks", l: "Light streaks", a: 0, b: 1, st: 0.01, d: 2, hint: "Vertical streaks of lights in wet-road reflections (mod's trace): on rough wet asphalt a light's reflection stretches toward you (up to 5x at low angles). Deep puddles keep a sharp mirror image." },
   ],
   // own trace only
   groundRefl: [
@@ -133,7 +131,7 @@ export const SLIDERS = {
     { k: "dropletSize", l: "Bead radius (m)", a: 0.004, b: 0.04, st: 0.001, d: 3, hint: "At 2.5 mm raindrops; scaled by 'Rain droplet size' (Falling rain section)." },
     { k: "dropletRefraction", l: "Refraction", a: -1.5, b: 2.5, st: 0.05, d: 2, hint: "How strongly each bead works as a lens: it shows a small, upside-down image of what lies around it." },
     { k: "dropletFresnel", l: "Fresnel (mirror rim)", a: 0, b: 2, st: 0.01, d: 2, hint: "How much of a mirror a bead's rim becomes (they stay clear where they face you). Low values keep the beads clear water; high values turn their rims into bright mirrors, like bubbles." },
-    { k: "dropletLightCatch", l: "Light catch", a: 0, b: 2, st: 0.05, d: 2, hint: "Where a bead mirrors something far brighter than the paint around it (the sky over a dark car, lit streets), its rim catches that light, so the drops show in the dark. At night every street lamp nearby also makes a tiny, mostly white spark on the beads that mirror it. Beads on mid and light paint by day stay clear lenses. It never tints the beads. 0 = the plain Fresnel everywhere." },
+    { k: "dropletLightCatch", l: "Light catch", a: 0, b: 2, st: 0.05, d: 2, hint: "Where a bead mirrors something far brighter than the paint around it (the sky over a dark car, lit streets), its rim catches that light, so the drops show in the dark. Beads on mid and light paint by day stay clear lenses. It never tints the beads. 0 = the plain Fresnel everywhere." },
     { k: "dropletSpeed", l: "Rain-hit / life rate", a: 0.1, b: 4, st: 0.05, d: 2 },
     { k: "dropletRunners", l: "Moving droplets", a: 0, b: 1, st: 0.01, d: 2, hint: "Drops that run backward with the airflow and down the panels with gravity." },
     { k: "dropletTrails", l: "Wet trails", a: 0, b: 1, st: 0.01, d: 2 },
@@ -156,7 +154,7 @@ export const SLIDERS = {
     { k: "windshieldSize", l: "Bead radius (m)", a: 0.002, b: 0.03, st: 0.001, d: 3, hint: "At 2.5 mm raindrops; scaled by 'Rain droplet size' (Falling rain section)." },
     { k: "glassRefraction", l: "Glass drops: refraction", a: -1.5, b: 2.5, st: 0.05, d: 2, hint: "How strongly each drop on the windshield, rear and side windows works as a lens: a small, upside-down image of the world around it. Same optics and scale as the body drops' Refraction." },
     { k: "glassFresnel", l: "Glass drops: Fresnel (mirror rim)", a: 0, b: 2, st: 0.01, d: 2, hint: "How much of a mirror the rim of a drop on the glass becomes, as a share of real water's Fresnel (same scale as the body drops). Higher values look like bubbles." },
-    { k: "glassLightCatch", l: "Glass drops: light catch", a: 0, b: 2, st: 0.05, d: 2, hint: "As the beads' Light catch. From outside, rims catch the bright sky over the dark cabin. At night every street lamp ahead shows in the drops as a tiny spark (from the seat the windshield glitters). 0 = off." },
+    { k: "glassLightCatch", l: "Glass drops: light catch", a: 0, b: 2, st: 0.05, d: 2, hint: "As the beads' Light catch. From outside, rims catch the bright sky over the dark cabin. 0 = off." },
     { k: "wiperSpeed", l: "Wiper speed", a: 0.1, b: 3, st: 0.05, d: 2 },
     { k: "wiperTrail", l: "Wiper trail width", a: 0, b: 1, st: 0.01, d: 2 },
   ],
@@ -166,14 +164,6 @@ export const SLIDERS = {
     { k: "splashSpeedMin", l: "Minimum speed (m/s)", a: 0, b: 40, st: 0.5, d: 1 },
     { k: "splashPuddle", l: "Only on puddles", a: 0, b: 1, st: 0.01, d: 2, hint: "0 = spray from any wet road (more in puddles), 1 = only where a tyre runs through a puddle." },
     { k: "tyreWakes", l: "Tyre wakes in puddles", a: 0, b: 2, st: 0.05, d: 2, hint: "Churned water as wide as the tyre, bow waves and spin rings where tyres roll through puddles." },
-  ],
-  // 1.0.1 Midnight (night street-racer look)
-  midnight: [
-    { k: "midnightTone", l: "Tone (0 night film, 1 warm film)", a: 0, b: 1, st: 0.01, d: 2, hint: "0 = night film: calm colours, the city's warm light pulled toward teal-grey, milky teal-grey blacks, warm-white lamps and a glow on the overcast sky. 1 = the first Midnight look: warm sepia highlights and more contrast." },
-    { k: "midnightGrade", l: "Night grade", a: 0, b: 1.5, st: 0.01, d: 2, hint: "Teal shadows, more contrast, calmer colours around the lights, vignette. The lights keep their own colour, a little stronger: sodium lamps warmer, white lamps cooler. 0 = no grade." },
-    { k: "midnightHaze", l: "Night air (haze)", a: 0, b: 1, st: 0.01, d: 2, hint: "Haze in the colour of the city's light, thicker with distance." },
-    { k: "midnightGlow", l: "Glow around lights", a: 0, b: 1, st: 0.01, d: 2, hint: "Soft halos around street lamps, headlights and neon, stronger in the haze." },
-    { k: "midnightHalos", l: "Lamp halos in the air", a: 0, b: 1.5, st: 0.01, d: 2, hint: "The light of the street lamps (up to 24, as far as 300 m ahead) in the wet night air, each in its own colour: soft halos around them and light cones under them, thicker in the haze and in heavier rain, dimmer far away." },
   ],
   hydro: [
     { k: "hydroStrength", l: "Water strength", a: 0, b: 2, st: 0.05, d: 2, hint: "Scales how much of the tyres' load the water carries and how hard it drags. 1 = the mode's own values." },

@@ -33,31 +33,9 @@
     <div class="rp-actions">
       <BngButton v-for="p in PRESETS" :key="p.k" @click="rp.applyPreset(p.k)">{{ p.l }}</BngButton>
     </div>
-    <div class="rp-muted">Or let it pick a moody weather: a look, the time of day, a new sun direction and haze (blue hour
-      drizzle, golden storm, grey downpour, dawn mist or Midnight).</div>
-    <div class="rp-actions">
-      <BngButton @click="rp.randomMood()">Random mood</BngButton>
-      <span v-if="state.diag && state.diag.mood" class="rp-muted">Now: <b>{{ state.diag.mood }}</b></span>
-    </div>
-    <BngSwitch :model-value="!!state.s.moodOnLoad" @update:model-value="rp.set('moodOnLoad', $event)">
-      A random mood on every map
-    </BngSwitch>
 
     <RpSlider v-for="x in SLIDERS.general" :key="x.k" v-bind="sliderProps(x)" @change="rp.set(x.k, $event)" />
 
-    <RpSection title="Midnight" :open="state.open.midnight" @toggle="rp.toggle('midnight')">
-      <div class="rp-muted">The night street-racer look: soaked streets that stay wet in a fine drizzle, dark asphalt that
-        mirrors every lamp with long light streaks, glassy puddles, the clock at midnight and a night film grade (calm
-        colours, milky teal-grey blacks, haze and halos around the street lamps). The 'Midnight' quick look sets all of
-        it.</div>
-      <BngSwitch :model-value="!!state.s.midnight" @update:model-value="rp.set('midnight', $event)">
-        Midnight
-      </BngSwitch>
-      <BngSwitch :model-value="!!state.s.midnightClock" @update:model-value="rp.set('midnightClock', $event)">
-        Hold the clock at midnight (your time comes back when Midnight goes off)
-      </BngSwitch>
-      <RpSlider v-for="x in SLIDERS.midnight" :key="x.k" v-bind="sliderProps(x)" @change="rp.set(x.k, $event)" />
-    </RpSection>
     <BngSwitch :model-value="!!state.s.autoClouds" @update:model-value="rp.set('autoClouds', $event)">
       Cloud the sky over while it rains
     </BngSwitch>
