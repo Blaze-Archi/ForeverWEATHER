@@ -16,6 +16,10 @@
 //     (4-11 clock units); 12 epochs are kept, so every drop has gone before its epoch drops out;
 //   * landing is uniform, and scaling about the centre keeps it uniform: no clear ring, no crowding at the edges.
 // Shape: a round drop (atlas tiles 0-7) whose half toward the centre is a little longer and narrower: a hint of a teardrop.
+// 1.5 (the user's request, and what wind-tunnel studies of car cameras show: drops on a lens migrate across it and merge,
+// they do not streak): the drops stay round dots and DRIFT - every epoch's drops together, each epoch in a direction of
+// its own (a little down the lens when slow, where gravity wins), plus a slow wobble of every drop - instead of all of
+// them being blown outward from the centre; faster at speed (rpLensE..G: how far since each epoch began).
 // (Until 1.1.1 the drops lived on a log-polar grid that started outside a clear centre and swept out much faster.)
 
 static const float RP_TILE_IN = 112.0 / 128.0;
@@ -69,8 +73,6 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     const float Hpx = max(dispatchRect.w, 1.0);
     const float2 sp = (float2(p) + 0.5 - (dispatchRect.xy + 0.5 * dispatchRect.zw)) / Hpx;  // screen heights, y down
     const float clearR = max(rpLensB.x, 0.0);
-    const float tailK = max(rpLensB.z, 1.0);
-    const float pinch = saturate(rpLensD.x);
     const float R0 = max(rpLensA.z, 0.002);
     const float frac0 = saturate(rpLensC.x);
     const int ep0 = int(rpLensC.y + 0.5);
@@ -90,9 +92,13 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     [unroll]
     for (int k = 0; k < 12; k++)
     {
-        const float sc = exp(-clamp(dF[k], 0.0, 40.0));   // 1.3: bounded (exp underflow -> inf centres) | landing space = screen x exp(-flow since the epoch began)
-        const float2 xl = sp * sc;
+        // 1.5: this epoch's drops have drifted together by dF (screen heights) in a direction of their own
         const int ep = ep0 - k;
+        const float aEp = 6.2831853 * rpRand(rpHash3(int3(ep, 77, 9001)));
+        float2 dirEp = float2(cos(aEp), sin(aEp)) + float2(0.0, 0.6 * (1.0 - saturate(rpLensB.y)));
+        dirEp /= max(length(dirEp), 1e-3);
+        const float2 shiftK = dirEp * clamp(dF[k], 0.0, 4.0);
+        const float2 xl = sp - shiftK;                                // landing space: where a drop seen here landed
         [unroll]
         for (int gi = 0; gi < 2; gi++)
         {
@@ -115,7 +121,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
                     float r6 = rpRand(rpPcg(h ^ 0x165667B1u));
                     float2 cl = (float2(c) + 0.25 + 0.5 * float2(r4, r5)) * cs;    // where it landed
                     float keep = (clearR > 0.001) ? smoothstep(clearR * 0.75, clearR, length(cl)) : 1.0;
-                    float2 cen = cl / sc;                                          // where the airflow has moved it
+                    // where it has drifted to, with a slow wobble of its own (it stays well inside its cell)
+                    float2 cen = cl + shiftK + 0.06 * cs * float2(sin(age * 1.7 + r4 * 6.2831853), cos(age * 1.3 + r5 * 6.2831853));
                     float rc = length(cen);
                     float2 radial = (rc > 0.01) ? cen / rc : float2(0.0, 1.0);
                     float2 tangential = float2(-radial.y, radial.x);
@@ -125,13 +132,10 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
                     R *= lerp(1.0, 0.72, smoothstep(0.72 * life, life, age));         // shrinks as it dries
                     float a = pres * keep * (1.0 - smoothstep(0.78 * life, life, age));
 
+                    // 1.5: a round dot (no teardrop toward the centre any more)
                     float2 d = sp - cen;
-                    float dr = dot(d, radial);
-                    float sy = (dr < 0.0) ? tailK : 1.0;                     // the half toward the centre is longer...
-                    float qy = dr / (R * sy);
-                    float qx = dot(d, tangential) / R;
-                    qx /= max(1.0 - pinch * saturate(-qy), 0.4);            // ...and narrows a little: a hint of a tip
-                    float2 q = float2(qx, qy);
+                    float sy = 1.0;
+                    float2 q = float2(dot(d, tangential), dot(d, radial)) / R;
                     float rr = dot(q, q);
                     float score = (1.0 - rr) * a;
                     if (rr < 1.0 && a > 0.001 && score > bestScore)

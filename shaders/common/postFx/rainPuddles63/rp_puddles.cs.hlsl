@@ -126,6 +126,58 @@ float2 rpLobeRadius(float2 lobe, float hk, float streakPx)
     return float2(rx, ry);
 }
 
+// 1.5 simulated ripples (rp_waves.cs.hlsl): the slope of the simulated water surface at world xy, and how far inside the
+// simulation's grid the point lies: toward the grid's edge it fades into the drawn rings, which go on beyond it.
+static const float RP_WAVE_N = 512.0;
+
+// height of one cell of the packed water texture (still water outside the grid and in the calibration cell)
+float rpWaveCellH(int2 i, bool srgbRead)
+{
+    if (any(i < 0) || any(i >= int(RP_WAVE_N)) || all(i == int2(0, 0)))
+    {
+        return 0.0;
+    }
+    return rpWaveDecode(rpWaveRaw(envTexTex.Load(int3(i, 0)), srgbRead)).x;
+}
+float2 rpWaveSlope(float2 xy, out float inGrid)
+{
+    inGrid = 0.0;
+    if (rpWaveP.w <= 0.0 || rpWaveP.z <= 0.0)
+    {
+        return float2(0.0, 0.0);
+    }
+    const float2 uv = (xy - rpWaveP.xy) / rpWaveP.z;
+    const float2 edge = min(uv, 1.0 - uv);
+    inGrid = smoothstep(0.0, 0.08, min(edge.x, edge.y));
+    if (inGrid <= 0.0)
+    {
+        return float2(0.0, 0.0);
+    }
+    // the water is packed (rpWaveDecode), so no hardware filtering: the slope at the four cell centres around the point
+    // (central differences of the 4 x 4 cells), bilinearly interpolated - continuous, no staircase at the cell borders
+    const float2 g = uv * RP_WAVE_N - 0.5;
+    const int2 i0 = int2(floor(g));
+    const float2 f = saturate(g - float2(i0));
+    const bool srgbRead = abs(envTexTex.Load(int3(0, 0, 0)).r - 0.5) > 0.1;   // the calibration texel (rpWaveRaw)
+    float h[16];
+    [unroll]
+    for (int y = 0; y < 4; y++)
+    {
+        [unroll]
+        for (int x = 0; x < 4; x++)
+        {
+            h[y * 4 + x] = ((x == 0 || x == 3) && (y == 0 || y == 3)) ? 0.0 : rpWaveCellH(i0 + int2(x - 1, y - 1), srgbRead);
+        }
+    }
+    // slopes (x2 cell) at the centres (1,1) (2,1) (1,2) (2,2) of the 4 x 4 block
+    const float2 s00 = float2(h[6] - h[4], h[9] - h[1]);
+    const float2 s10 = float2(h[7] - h[5], h[10] - h[2]);
+    const float2 s01 = float2(h[10] - h[8], h[13] - h[5]);
+    const float2 s11 = float2(h[11] - h[9], h[14] - h[6]);
+    const float cell = rpWaveP.z / RP_WAVE_N;
+    return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y) / (2.0 * cell);
+}
+
 float rpSceneMetres(int2 q)
 {
     float ndc = rpDepthLoad(rpClampPix(q));
@@ -708,6 +760,15 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
                 float rf = (1.0 - smoothstep(20.0, 85.0, dist)) * inPuddle * smoothstep(0.0, 0.15, rainNow) * (0.45 + 0.55 * rainNow);
                 rip = rpRipples(P.xy, rpCam.w) * rpPuddleB.y * rf;
             }
+            // 1.5: near the camera the rings come from the wave simulation instead (raindrops and tyres stir real
+            // water: rings of every size that cross, reflect off each other and fade); its gain already holds the
+            // 'Ripples' strength
+            float inGrid = 0.0;
+            float2 simSlope = rpWaveSlope(P.xy, inGrid);
+            if (inGrid > 0.0)
+            {
+                rip = lerp(rip, simSlope * rpWaveP.w * inPuddle * (1.0 - smoothstep(20.0, 85.0, dist)), inGrid);
+            }
             // 0.3 puddle-field slope: the rim of each puddle bends the reflection like a real water edge.
             float eps = max(0.035, tile * 0.0028);
             float nXp = rpSampleField(maskTexA, uvA + float2(eps / tile, 0.0), fp);
@@ -1053,6 +1114,28 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
             // Surroundings capture as the reflections read it: the captured scene where a ray is covered, dark red
             // where the capture has no coverage (too low an angle) or is switched off.
             col = lerp(float3(0.25, 0.02, 0.02) * dbgBright, envS.rgb, envS.a);
+        }
+        else if (dbgMode > 20.5 && dbgMode < 21.5)
+        {
+            // 1.5 debug 21: the simulated water - its slope as colour (grey = level), blue outside the wave grid. Top
+            // left, 1:1: the simulation texture itself (red = height, green = velocity, blue = texel written)
+            float ig = 0.0;
+            float2 sl = rpWaveSlope(P.xy, ig);
+            float3 wv = float3(0.5 + sl.x * 6.0, 0.5 + sl.y * 6.0, 0.5);
+            col = lerp(float3(0.05, 0.1, 0.4), saturate(wv), ig);
+            int2 tq = int2(p) - int2(dispatchRect.xy);
+            if (all(tq >= 0) && tq.x < 1024 && tq.y < 512)
+            {
+                int2 tt = int2(tq.x & 511, tq.y);
+                bool srgbR = abs(envTexTex.Load(int3(0, 0, 0)).r - 0.5) > 0.1;
+                float4 raw = rpWaveRaw(envTexTex.Load(int3(tt, 0)), srgbR);
+                float2 hv = rpWaveDecode(raw);
+                col = (tq.x < 512) ? float3(raw.g, raw.a, 0.0) : float3(saturate(0.5 + hv.x * 300.0), saturate(0.5 + hv.y * 20.0), 0.5);
+                if (tq.y < 16)
+                {
+                    col = srgbR ? float3(1.0, 0.0, 1.0) : float3(0.0, 1.0, 0.0);   // magenta: read as sRGB, green: raw
+                }
+            }
         }
         else if (dbgMode > 19.5 && dbgMode < 20.5)
         {

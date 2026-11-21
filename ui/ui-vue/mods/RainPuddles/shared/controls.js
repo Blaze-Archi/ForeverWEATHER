@@ -61,6 +61,9 @@ export const DEBUG_VIEWS = [
   { v: 18, l: "Surroundings capture (reflection fallback)" },
   { v: 19, l: "Falling rain only (white streaks, blue splashes)" },
   { v: 20, l: "Puddle slope (green level enough, red too steep, stripes every 1 %)" },
+  { v: 21, l: "Simulated water (slope as colour, grey = level, blue = outside the simulation)" },
+  { v: 22, l: "Simulated mist (orange = mist; bottom left: the air layers from above, top left: target check)" },
+  { v: 23, l: "Glass water (blue = water, white = pushed-together lines, yellow = wiper film, green = body beside the glass)" },
 ]
 
 export const SLIDERS = {
@@ -102,7 +105,7 @@ export const SLIDERS = {
     { k: "puddleStrength", l: "Darkening", a: 0, b: 1, st: 0.01, d: 2 },
     { k: "puddleRoughness", l: "Water roughness (0 = mirror)", a: 0, b: 1, st: 0.01, d: 2 },
     { k: "puddleNormal", l: "Normal detail", a: 0, b: 2, st: 0.01, d: 2 },
-    { k: "puddleRipple", l: "Rain ripples", a: 0, b: 2, st: 0.05, d: 2, hint: "0.3-style rain rings, inside puddles only." },
+    { k: "puddleRipple", l: "Rain ripples", a: 0, b: 2, st: 0.05, d: 2, hint: "Rain rings in the puddles. Near you they come from the water simulation (see 'Simulated ripples'), further away they are drawn." },
     { k: "maxDistance", l: "Distance (m)", a: 30, b: 600, st: 5, d: 0, hint: "How far from the camera puddles are drawn (with 'Only on roads': on the 64 road pieces nearest to the camera, ahead of it first)." },
     { k: "puddleMaxSlope", l: "Steepest ground for puddles (%)", a: 1, b: 30, st: 0.5, d: 1, hint: "Water only stands on level ground: puddles fade out on slopes, from 60 % of this grade to it (5 % = about 3 degrees; flat streets and their camber keep their puddles). Measured from the road's real shape, and the tyres feel the same puddles. 30 = puddles on slopes too." },
     { k: "vehMaskHeight", l: "Keep off cars: mask height (m)", a: 0.03, b: 0.8, st: 0.01, d: 2, hint: "Inside a car's box, anything this far above the road counts as the car (no puddles or wet ground on it). Lower it if puddles still show on low bodywork, raise it if a dry patch appears around the car." },
@@ -146,7 +149,7 @@ export const SLIDERS = {
     { k: "lensDensity", l: "Maximum density", a: 0, b: 1, st: 0.01, d: 2 },
     { k: "lensSize", l: "Droplet size", a: 0.008, b: 0.06, st: 0.001, d: 3 },
     { k: "lensClearCenter", l: "Clear centre radius", a: 0, b: 0.6, st: 0.01, d: 2, hint: "Keeps the middle of the screen free of drops (screen heights). 0 = rain lands all over the lens." },
-    { k: "lensSpeedResponse", l: "Speed sweep", a: 0, b: 3, st: 0.05, d: 2, hint: "How strongly driving blows the drops toward the edges of the screen (the faster, the further out a drop already is)." },
+    { k: "lensSpeedResponse", l: "Speed drift", a: 0, b: 3, st: 0.05, d: 2, hint: "How fast driving makes the drops drift across the lens. They stay round dots and wander off; parked they barely move." },
     { k: "lensRefraction", l: "Refraction", a: 0, b: 2, st: 0.05, d: 2 },
   ],
   windshield: [
@@ -156,7 +159,7 @@ export const SLIDERS = {
     { k: "glassFresnel", l: "Glass drops: Fresnel (mirror rim)", a: 0, b: 2, st: 0.01, d: 2, hint: "How much of a mirror the rim of a drop on the glass becomes, as a share of real water's Fresnel (same scale as the body drops). Higher values look like bubbles." },
     { k: "glassLightCatch", l: "Glass drops: light catch", a: 0, b: 2, st: 0.05, d: 2, hint: "As the beads' Light catch. From outside, rims catch the bright sky over the dark cabin. 0 = off." },
     { k: "wiperSpeed", l: "Wiper speed", a: 0.1, b: 3, st: 0.05, d: 2 },
-    { k: "wiperTrail", l: "Wiper trail width", a: 0, b: 1, st: 0.01, d: 2 },
+    { k: "wiperTrail", l: "Wiper trail width", a: 0, b: 1, st: 0.01, d: 2, hint: "How much of a film the blades leave behind (with Simulated glass water: the hazy, streaky smear after each wipe)." },
   ],
   spray: [
     { k: "splashIntensity", l: "Spray intensity", a: 0, b: 2, st: 0.01, d: 2 },
@@ -164,6 +167,7 @@ export const SLIDERS = {
     { k: "splashSpeedMin", l: "Minimum speed (m/s)", a: 0, b: 40, st: 0.5, d: 1 },
     { k: "splashPuddle", l: "Only on puddles", a: 0, b: 1, st: 0.01, d: 2, hint: "0 = spray from any wet road (more in puddles), 1 = only where a tyre runs through a puddle." },
     { k: "tyreWakes", l: "Tyre wakes in puddles", a: 0, b: 2, st: 0.05, d: 2, hint: "Churned water as wide as the tyre, bow waves and spin rings where tyres roll through puddles." },
+    { k: "mistAmount", l: "Mist amount", a: 0, b: 2, st: 0.05, d: 2, hint: "How much of the fine spray hangs in the air (Simulated mist). 0 = none." },
   ],
   hydro: [
     { k: "hydroStrength", l: "Water strength", a: 0, b: 2, st: 0.05, d: 2, hint: "Scales how much of the tyres' load the water carries and how hard it drags. 1 = the mode's own values." },

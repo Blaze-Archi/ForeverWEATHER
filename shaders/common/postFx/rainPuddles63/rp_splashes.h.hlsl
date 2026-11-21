@@ -10,6 +10,9 @@ Texture2D<float> prepassDepthTex : register(t1);
 SamplerState rpDepthSampler : register(s1);   // point clamp (state block slot 1)
 Texture2D<float4> maskTexA : register(t2);
 Texture2D<float4> maskTexB : register(t3);
+// 1.5 simulated mist (#rpMistSB, rp_mist.cs.hlsl): the air's state as the mist passes left it last frame
+Texture2D<float4> mistTex : register(t4);
+SamplerState rpMistSampler : register(s4);    // linear clamp (state block slot 4)
 
 cbuffer perDraw : register(b0)
 {
@@ -19,6 +22,10 @@ cbuffer perDraw : register(b0)
     uniform float4 rpSplashB;  // x puddle coverage, y softness, z tile, w only-on-puddles (0 = any wet road)
     uniform float4 rpSplashC;  // x puddle water level, y max distance, z puddle size, w current rain
     uniform float4 rpSplashD;  // 1.3 x night (0 by day .. 1 at night), from the time of day
+    uniform float4 rpMistP;    // 1.5 simulated mist: xy world position of the grid's corner (m), z cell size (m),
+                               // w height of the road plane at the corner (m)
+    uniform float4 rpMistQ;    // xy slope of the road plane (dz/dx, dz/dy), z extinction per unit of density (1/m,
+                               // 0 = no mist), w where the mist starts to show (m from the camera; full 2.5 m further)
 
     // 0.9: up to 8 tyres (player first, then traffic). A = contact point (world) + half tread width,
     // B = travel direction xy + ground speed + tread speed (spin), C = radius, active, spray clock, seed.

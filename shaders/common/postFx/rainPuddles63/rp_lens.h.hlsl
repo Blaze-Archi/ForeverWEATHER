@@ -19,7 +19,8 @@ cbuffer perDraw : register(b0)
                                // centre (1.2: a slight teardrop), w rain
     uniform float4 rpLensC;    // 1.2: x progress of the current epoch of the life clock (0..1), y its index (mod 2^20), z unused, w aspect
     uniform float4 rpLensD;    // 1.2: x how much the half toward the centre narrows (the hint of a tip), yz unused, w active
-    uniform float4 rpLensE;    // 1.2: flow (log radius) since the start of the current epoch (x) and of the 11 before it (x..w of
+    uniform float4 rpLensE;    // 1.5: how far the drops drifted (screen heights) since the start of the current epoch (x) and of
+                               //      the 11 before it; 1.2-1.4: the outward flow (log radius) (x..w of
     uniform float4 rpLensF;    //      E, F, G = epochs 0..11 back): every drop of an epoch has moved outward by exp(this)
     uniform float4 rpLensG;
 

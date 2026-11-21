@@ -92,6 +92,9 @@
         Roads only (no puddles on sand, grass or off the road)
       </BngSwitch>
       <div class="rp-muted">{{ rp.roadsText() }}</div>
+      <BngSwitch :model-value="state.s.rippleSim !== false" @update:model-value="rp.set('rippleSim', $event)">
+        Simulated ripples (the water near you is simulated: raindrops and tyres make rings that spread, cross and fade)
+      </BngSwitch>
       <RpSlider v-for="x in SLIDERS.puddlePbr" :key="x.k" v-bind="sliderProps(x)" @change="rp.set(x.k, $event)" />
 
       <div class="rp-sub">Reflections</div>
@@ -150,6 +153,9 @@
       <BngSwitch :model-value="!!state.s.windshieldOutside" @update:model-value="rp.set('windshieldOutside', $event)">
         Also when looking at your car from outside
       </BngSwitch>
+      <BngSwitch :model-value="state.s.glassSim !== false" @update:model-value="rp.set('glassSim', $event)">
+        Simulated glass water on the windshield and rear glass (the wipers push the water to the ends of their sweep and leave a smear; it refills with the rain and runs with speed and gravity)
+      </BngSwitch>
       <BngSwitch :model-value="!!state.s.rearGlass" @update:model-value="rp.set('rearGlass', $event)">
         Drops on the rear / hatch glass too
       </BngSwitch>
@@ -173,6 +179,9 @@
 
     <RpSection title="Tyre spray & wakes" :open="state.open.spray" @toggle="rp.toggle('spray')">
       <RpSlider v-for="x in SLIDERS.spray" :key="x.k" v-bind="sliderProps(x)" @change="rp.set(x.k, $event)" />
+      <BngSwitch :model-value="state.s.mistSim !== false" @update:model-value="rp.set('mistSim', $event)">
+        Simulated mist (the fine spray is carried by simulated air: it trails, swirls and hangs behind the cars)
+      </BngSwitch>
       <BngSwitch :model-value="!!state.s.trafficSpray" @update:model-value="rp.set('trafficSpray', $event)">
         Other vehicles too (up to 8 tyres)
       </BngSwitch>

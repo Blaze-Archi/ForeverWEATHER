@@ -289,6 +289,74 @@ float3 rpSafe(float3 c, float3 fallback)
     return max(c, 0.0);
 }
 
+// 1.5 simulated ripples: the engine stores the simulation's targets as 0..1 fixed point (whatever format is asked for),
+// so a signed value is kept as 16-bit fixed point in two channels: the upper and lower 8 bits of (x / range + 0.5).
+// The upper half is rounded back to its 8-bit step on reading, which also survives 10-bit channels.
+static const float RP_WAVE_HMAX = 0.02;   // height range: +-2 cm
+static const float RP_WAVE_VMAX = 1.0;    // vertical velocity range: +-1 m/s
+float2 rpPack16(float x, float range)
+{
+    float u = saturate(x / range * 0.5 + 0.5) * 255.0;
+    float hi = min(floor(u), 254.0);
+    return float2(hi / 255.0, saturate(u - hi));
+}
+float rpUnpack16(float2 p, float range)
+{
+    return ((round(p.x * 255.0) + saturate(p.y)) / 255.0 - 0.5) * 2.0 * range;
+}
+// height and vertical velocity of a packed water texel
+float2 rpWaveDecode(float4 t)
+{
+    return float2(rpUnpack16(t.rg, RP_WAVE_HMAX), rpUnpack16(t.ba, RP_WAVE_VMAX));
+}
+// The engine reads its 8-bit targets through an sRGB view while the compute pass writes raw values (found in game: a
+// raw 0.5 read back as 0.21). Cell (0, 0) always holds a raw 0.5: if it reads back far from 0.5, the colour channels
+// are put back through linear -> sRGB, which returns the stored byte exactly (alpha is never converted).
+float rpLinToSrgb1(float c)
+{
+    c = saturate(c);
+    return (c <= 0.0031308) ? c * 12.92 : 1.055 * pow(c, 1.0 / 2.4) - 0.055;
+}
+float4 rpWaveRaw(float4 t, bool srgbRead)
+{
+    if (srgbRead)
+    {
+        t.rgb = float3(rpLinToSrgb1(t.r), rpLinToSrgb1(t.g), rpLinToSrgb1(t.b));
+    }
+    return t;
+}
+static const float4 RP_WAVE_CAL = float4(0.5, 0.5, 0.5, 0.5);
+float4 rpWaveEncode(float h, float v)
+{
+    return float4(rpPack16(h, RP_WAVE_HMAX), rpPack16(v, RP_WAVE_VMAX));
+}
+
+// 1.5 simulated mist (rp_mist.cs.hlsl, drawn by the spray pass): the air above the road in three layers, each a
+// 128 x 128 grid; in the state targets the layers lie side by side, plane A (u, density upper half) then plane B (v,
+// density lower half). The density is kept as sqrt(d / DMAX) in 16-bit fixed point: fine steps where the mist is thin.
+static const int RP_MIST_N = 128;
+static const int RP_MIST_LAYERS = 3;
+static const float RP_MIST_VMAX = 40.0;    // air speed range: +-40 m/s
+static const float RP_MIST_DMAX = 4.0;     // mist density range
+static const float RP_MIST_PMAX = 96.0;    // pressure range (m^2/s)
+static const float RP_MIST_QMAX = 128.0;   // divergence range (1/s)
+// the layers' heights above the road (m)
+float2 rpMistLayerZ(int l)
+{
+    return (l == 0) ? float2(0.0, 0.5) : ((l == 1) ? float2(0.5, 1.0) : float2(1.0, 2.0));
+}
+// 0..1 as 16-bit fixed point in two channels (rpPack16 without the sign)
+float2 rpPackU16(float x)
+{
+    const float u = saturate(x) * 255.0;
+    const float hi = min(floor(u), 254.0);
+    return float2(hi / 255.0, saturate(u - hi));
+}
+float rpUnpackU16(float2 p)
+{
+    return (round(p.x * 255.0) + saturate(p.y)) / 255.0;
+}
+
 // 1.3: Fresnel of a water surface seen from INSIDE the water (the windshield drops from the cabin: the ray leaves the
 // drop through its curved surface). cosI = cosine between the ray in the water and the surface normal. Schlick on the
 // air side; total internal reflection beyond the critical angle (48.8 deg for water).

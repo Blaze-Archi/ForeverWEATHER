@@ -8,7 +8,8 @@ uniform_sampler2D(colorTex, 0);
 uniform_sampler2D(windDepth, 1);   // prepass depth: where the view really passes through the glass (1.0: slot 1, point
                                    // sampler, as in the puddle / droplet passes - on slot 4 it read as empty)
 uniform_sampler2D(maskTexA, 2);
-uniform_sampler2D(maskTexB, 3);
+uniform_sampler2D(glassTex, 3);    // 1.5 glass water on the windshield (#rpGlassB, rp_glass.cs.hlsl): x water, y film
+                                   // (another pane: any texture, not read; this slot held an unused puddle mask)
 uniform_sampler2D(wiperTex, 4);
 uniform_sampler2D(dropTex, 5);     // 0.7: droplet atlas (art/rainPuddles/droplet_atlas.data.png)
 
@@ -45,7 +46,8 @@ cbuffer perDraw : register(b0)
     uniform float4 rpWindM;    // 1.0 glass bulge along the normal (m): k0 + k1*b + (k2 + k3*b)*a^2, a/b glass metres
     uniform float4 rpWindP0; uniform float4 rpWindP1; uniform float4 rpWindP2;   // outline corners, 2 per float4,
     uniform float4 rpWindP3; uniform float4 rpWindP4; uniform float4 rpWindP5;   // glass uv, counter-clockwise
-    uniform float4 rpWindU;    // 1.3 x light catch of the glass drops (as the beads' rpDropD.w), yzw unused
+    uniform float4 rpWindU;    // 1.3 x light catch of the glass drops (as the beads' rpDropD.w); 1.5 y 1 = glass water
+                               // in glassTex, z how far it reaches (glass half sizes, beyond the pane's +-1), w unused
 
     // Lighting globals the engine binds BY NAME. The Vulkan shader path does not declare them for us (the working
     // droplets header declares them for the same reason); without them rpSkyColor() fails to compile and the whole
@@ -59,6 +61,7 @@ cbuffer perDraw : register(b0)
 
 #include "shaders/common/postFx/postFx.hlsl"
 #include "rp_lib.h.hlsl"
+#include "rp_pane.h.hlsl"
 
 float3 rpSkyColor(float3 dir)
 {

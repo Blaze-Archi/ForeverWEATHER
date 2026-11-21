@@ -50,6 +50,168 @@ float rpSprayPuddle(float2 w)
     return smoothstep(cut, cut + max(rpSplashB.y, 0.004), shape);
 }
 
+// 1.5 simulated mist (rp_mist.cs.hlsl) --------------------------------------------------------------------------------
+// Mist density in layer l at g (grid cells from the corner; cell i spans i..i+1). Through the linear sampler: the upper
+// half of the stored sqrt(density) is plenty to look at. Fades out over the grid's last cells.
+float rpMistDensity(int l, float2 g, bool srgb)
+{
+    const float2 gc = clamp(g, 0.5, float(RP_MIST_N) - 0.5);
+    const float2 uv = float2((float(l * RP_MIST_N) + gc.x) / float(2 * RP_MIST_LAYERS * RP_MIST_N), gc.y / float(RP_MIST_N));
+    float e = mistTex.SampleLevel(rpMistSampler, uv, 0).b;
+    e = srgb ? rpLinToSrgb1(e) : e;
+    const float2 edge = min(g, float(RP_MIST_N) - g);
+    return e * e * RP_MIST_DMAX * smoothstep(1.5, 6.0, min(edge.x, edge.y));
+}
+
+// Mist density at height h above the road: the layers hold it at their middles (0.25, 0.75 and 1.5 m), in between it
+// is blended, above the top layer's middle it thins out to nothing at 2.4 m (slab edges drew hard horizontal bands where
+// rays ran flat through a layer).
+float rpMistDensityH(float2 g, float h, bool srgb)
+{
+    if (h < 0.0 || h > 2.4)
+    {
+        return 0.0;
+    }
+    if (h <= 0.25)
+    {
+        return rpMistDensity(0, g, srgb);
+    }
+    if (h <= 0.75)
+    {
+        return lerp(rpMistDensity(0, g, srgb), rpMistDensity(1, g, srgb), (h - 0.25) / 0.5);
+    }
+    if (h <= 1.5)
+    {
+        return lerp(rpMistDensity(1, g, srgb), rpMistDensity(2, g, srgb), (h - 0.75) / 0.75);
+    }
+    return rpMistDensity(2, g, srgb) * (1.0 - (h - 1.5) / 0.9);
+}
+
+// Fine structure of the mist at world point w: it is billows and wisps, not a smooth haze. Value noise in world space
+// (two octaves, the height shifts it so the billows are not columns), slowly churning; 1 on average.
+float rpMistDetail(float3 w)
+{
+    const float t = rpCam.w;
+    const float2 p = w.xy * 1.3 + float2(w.z * 0.9, -w.z * 0.7) + float2(t * 0.11, t * 0.07);
+    const float n = 0.6 * rpSprayNoise(p) + 0.4 * rpSprayNoise(p * 2.3 + float2(5.1 - t * 0.19, 1.7 + t * 0.13));
+    return 0.2 + 1.6 * n;
+}
+
+// How much mist the ray from the camera passes through before it reaches the scene (density x metres): the part of the
+// ray over the grid and below 2.4 m above the road, sampled (more samples where it runs flat), jittered per pixel,
+// faded in over the first 2.5 m past rpMistQ.w (the camera is often right above its own car's fresh trail).
+float rpMistDepth(float3 rd, float tMax, float jit, bool srgb)
+{
+    const float n = float(RP_MIST_N);
+    const float2 g0 = (rpCam.xy - rpMistP.xy) / rpMistP.z;
+    const float2 gd = rd.xy / rpMistP.z;
+    float t0 = rpMistQ.w;
+    float t1 = min(tMax, 90.0);
+    [unroll]
+    for (int a = 0; a < 2; a++)
+    {
+        if (abs(gd[a]) < 1e-7)
+        {
+            if (g0[a] < 0.0 || g0[a] > n)
+            {
+                return 0.0;
+            }
+        }
+        else
+        {
+            const float ta = (0.0 - g0[a]) / gd[a];
+            const float tb = (n - g0[a]) / gd[a];
+            t0 = max(t0, min(ta, tb));
+            t1 = min(t1, max(ta, tb));
+        }
+    }
+    if (t1 <= t0)
+    {
+        return 0.0;
+    }
+    // height above the road plane along the ray: h0 + hs t; the part of the ray between 0 and 2.4 m
+    const float h0 = rpCam.z - (rpMistP.w + dot(rpMistQ.xy, rpCam.xy - rpMistP.xy));
+    const float hs = rd.z - dot(rpMistQ.xy, rd.xy);
+    if (abs(hs) < 1e-5)
+    {
+        if (h0 < 0.0 || h0 > 2.4)
+        {
+            return 0.0;
+        }
+    }
+    else
+    {
+        const float u0 = (0.0 - h0) / hs;
+        const float u1 = (2.4 - h0) / hs;
+        t0 = max(t0, min(u0, u1));
+        t1 = min(t1, max(u0, u1));
+    }
+    if (t1 <= t0)
+    {
+        return 0.0;
+    }
+    const float len = t1 - t0;
+    const int ns = clamp(int(ceil(len / 0.7)), 3, 12);
+    const float st = len / float(ns);
+    float sum = 0.0;
+    [loop]
+    for (int k = 0; k < ns; k++)
+    {
+        const float t = t0 + (float(k) + jit) * st;
+        const float dn = rpMistDensityH(g0 + gd * t, h0 + hs * t, srgb);
+        if (dn > 1e-4)
+        {
+            sum += dn * rpMistDetail(rpCam.xyz + rd * t) * saturate((t - rpMistQ.w) / 2.5);
+        }
+    }
+    return sum * st;
+}
+
+// The light the mist sends toward the eye: as the plume's (the sky's by day, at least the brightness behind it; at
+// night the light behind it, the brightest light around it and a capped glow), without the plume's per-tyre taps.
+float3 rpMistLight(float3 src, int2 p)
+{
+    const float3 amb = rpSprayAmbient();
+    const float mistL = max(rpLuma(amb) * 1.15, max(rpLuma(src) * 0.9, 0.06));
+    float3 mist = float3(0.82, 0.87, 0.93) * mistL;
+    const float night = saturate(rpSplashD.x);
+    if (night > 0.01)
+    {
+        float3 mistN = amb * 1.15;
+        const float3 srcN = src * 0.9;
+        if (rpLuma(srcN) > rpLuma(mistN))
+        {
+            mistN = srcN;
+        }
+        float3 glowC = float3(0.0, 0.0, 0.0);
+        float bestG = 0.0;
+        const float rs = dispatchRect.w / 1080.0;
+        float frameL = 0.0;
+        [unroll]
+        for (int gi = 0; gi < 8; gi++)
+        {
+            const float ang = float(gi) * 0.7853982 + (((gi & 1) == 1) ? 0.3927 : 0.0);
+            const float rr = (((gi & 1) == 1) ? 52.0 : 22.0) * rs;
+            const int2 qg = p + int2(round(float2(cos(ang), sin(ang)) * rr));
+            const float3 cg = colorTex.Load(int3(rpClampPix(qg), 0)).rgb;
+            const float lg = rpLuma(cg);
+            if (lg > bestG)
+            {
+                bestG = lg;
+                glowC = cg;
+            }
+            const float2 fu = float2((float(gi & 3) + 0.5) / 4.0, (float(gi >> 2) + 0.5) / 2.0);
+            frameL += rpLuma(colorTex.Load(int3(rpClampPix(int2(dispatchRect.xy + fu * dispatchRect.zw)), 0)).rgb);
+        }
+        frameL /= 8.0;
+        mistN += glowC * 0.35;
+        mistN = lerp(mistN, rpLuma(mistN).xxx, 0.2);
+        mistN *= min(1.0, (14.0 * frameL + 1e-4) / max(rpLuma(mistN), 1e-6));
+        mist = lerp(mist, mistN, night);
+    }
+    return mist;
+}
+
 PFX_NUMTHREADS
 void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
@@ -107,7 +269,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
             const float hw = tA[ti].w;
             const float2 dir2 = tB[ti].xy;
             const float g = tB[ti].z;                     // ground speed
-            const float tread = tB[ti].w;                 // tread speed (spin)
+            const float tread = clamp(tB[ti].w, 0.0, 80.0); // tread speed (spin); 1.5: clamped (a car's physics once
+                                                            // reported 9e8 m/s for a parked car's wheels)
             const float v = max(g, tread);
             const float slip = saturate(abs(tread - g) / 6.0);
             // 1.1: from half the threshold speed up, full a little above it, then still a little more up to ~120 km/h
@@ -329,6 +492,58 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
                     }
                 }
             }
+        }
+    }
+
+    // 1.5 simulated mist: the spray the air carried off, swirled and left hanging behind the cars, along this pixel's ray
+    // up to the scene (the mist passes run after this pass: it is the mist of the last frame, in the last frame's grid)
+    float mistA = 0.0;
+    float mistCal = -1.0;
+    if (rpMistQ.z > 0.0)
+    {
+        mistCal = mistTex.Load(int3(0, 0, 0)).r;   // the calibration texel: 0.5 read raw, 0.216 through an sRGB view
+        if (abs(mistCal - 0.5) < 0.03 || abs(mistCal - 0.2158) < 0.03)
+        {
+            const float mistJit = frac(52.9829189 * frac(dot(float2(p), float2(0.06711056, 0.00583715))));
+            const float tau = rpMistDepth(rd, sceneDist, mistJit, abs(mistCal - 0.5) > 0.1) * rpMistQ.z;
+            mistA = min(1.0 - exp(-tau), 0.45);
+            if (mistA > 0.002)
+            {
+                col = lerp(col, rpMistLight(src.rgb, p), mistA);
+            }
+        }
+    }
+
+    if (rpMode.x > 21.5 && rpMode.x < 22.5)
+    {
+        // Debug 22: simulated mist. Orange = the mist on screen. Bottom left (two screen pixels per cell, north up): the
+        // three layers from above, low to high (red = air speed east-west, green = north-south, up to 15 m/s; white =
+        // mist). Top left square: green = the mist's targets read raw, magenta = through an sRGB view, red =
+        // unreadable, grey = the mist is off or not running yet.
+        const float B = max(rpLuma(src.rgb), 0.05) * 2.0 * rpMode.w;
+        col = float3(0.05, 0.05, 0.05) * B;
+        col = lerp(col, float3(1.0, 0.55, 0.08) * B, saturate(mistA * 2.5));
+        const int2 lp = p - int2(dispatchRect.xy);
+        const int2 ip = int2(lp.x, int(dispatchRect.w) - 1 - lp.y) / 2;
+        const bool calOk = abs(mistCal - 0.5) < 0.03 || abs(mistCal - 0.2158) < 0.03;
+        if (calOk && ip.x < RP_MIST_LAYERS * RP_MIST_N && ip.y < RP_MIST_N)
+        {
+            const bool sr = abs(mistCal - 0.5) > 0.1;
+            const float4 ta = rpWaveRaw(mistTex.Load(int3(ip, 0)), sr);
+            const float4 tb = rpWaveRaw(mistTex.Load(int3(ip + int2(RP_MIST_LAYERS * RP_MIST_N, 0), 0)), sr);
+            const float e = rpUnpackU16(float2(ta.b, tb.b));
+            col = float3(saturate(abs(rpUnpack16(ta.rg, RP_MIST_VMAX)) / 15.0), saturate(abs(rpUnpack16(tb.rg, RP_MIST_VMAX)) / 15.0), 0.0) * 0.8
+                + saturate(e * e * RP_MIST_DMAX * 3.0).xxx;
+            if (ip.x % RP_MIST_N == 0)
+            {
+                col = float3(0.3, 0.3, 0.3);
+            }
+        }
+        if (all(lp < int2(24, 24)))
+        {
+            col = (rpMistQ.z <= 0.0 || mistCal < -0.5) ? float3(0.4, 0.4, 0.4)
+                : (abs(mistCal - 0.5) < 0.03 ? float3(0.1, 0.9, 0.1)
+                : (abs(mistCal - 0.2158) < 0.03 ? float3(0.9, 0.1, 0.9) : float3(0.9, 0.1, 0.1)));
         }
     }
 

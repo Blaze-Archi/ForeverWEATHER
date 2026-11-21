@@ -9,11 +9,15 @@ uniform_sampler2D(prepassDepthTex, 1);
 Texture2D<float4> colorTex : register(t2);
 Texture2D<float4> maskTexA : register(t3);
 Texture2D<float4> maskTexB : register(t4);
-uniform_sampler2D(envTex, 5);      // 1.0 surroundings capture (an upward render view of the real scene), linear sampler
+uniform_sampler2D(envTex, 5);      // 1.0 surroundings capture (an upward render view of the real scene), linear sampler;
+                                   // 1.5: or, when the capture is not in use, the simulated water (#rpWaveC, packed;
+                                   // a post effect has only slots 0..5)
 
 cbuffer perDraw : register(b0)
 {
     uniform float4 rpPuddleN;  // 1.0 surroundings as the miss fallback: x on the wet ground, y in puddles, z blur (texels), w unused
+    uniform float4 rpWaveP;    // 1.5 simulated ripples: xy world position (m) of the wave grid's corner, z its size (m),
+                               //     w gain of its slope (0 = off: the drawn rings everywhere)
     uniform float4 rpEnvA;     // 1.0 surroundings capture: xyz where it was taken (world), w 1 = available
     uniform float4 rpEnvB;     //     xyz image right (world), w tan(half field of view)
     uniform float4 rpEnvC;     //     xyz image up (world), w brightness gain

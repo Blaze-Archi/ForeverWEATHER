@@ -19,11 +19,6 @@
 //   teardrops and leave wet trails.
 
 static const float RP_TILE_IN = 112.0 / 128.0;
-static const float2 RP_PIVOT0 = float2(-0.30, -1.06);  // procedural tandem wipers: x in half widths, y in half heights
-static const float2 RP_PIVOT1 = float2( 0.55, -1.06);
-static const float RP_BLADE_R0 = 0.16;                  // blade span along the arm (glass half heights)
-static const float RP_BLADE_R1 = 1.72;
-
 float3 rpWindLoad(int2 q)
 {
     return colorTexTex.Load(int3(clamp(q, int2(dispatchRect.xy), int2(dispatchRect.xy + dispatchRect.zw) - 1), 0)).rgb;
@@ -146,117 +141,10 @@ float4 rpWindShape(float2 q, float tile, float lod, bool atlas)
     return s * inside;
 }
 
-float rpWrapPi(float x)
-{
-    return x - 6.2831853 * floor((x + 3.14159265) / 6.2831853);
-}
-
-// Seconds since blade bl (xy pivot, z parked angle, w signed sweep) last passed over q (1e6 = never / out of reach);
-// rr = inner / outer radius of the wiped band. passes = blade passes over q in the current cycle (0..2), used to give
-// each wiped spot a fresh set of drops.
-// ph = the blade's phase in half sweeps (wiper model): it rests at easing(ph) of its arc and passes q at (tri - ph) and
-// (2 - tri - ph) half sweeps into the cycle (0 = parked at the start of the arc: out at tri, back at 2 - tri).
-float rpWipeAge(float2 q, float4 bl, float2 rr, float ph, float tc, float sweepT, float period, float flags,
-                out float passes, out float reach)
-{
-    float age = 1e6;
-    passes = 0.0;
-    float2 d = q - bl.xy;
-    float rho = length(d);
-    float rng = (bl.w >= 0.0) ? max(bl.w, 1e-3) : min(bl.w, -1e-3);
-    float x = rpWrapPi(atan2(d.y, d.x + 1e-9) - bl.z) / rng;   // 1.3: never atan2(0, 0)
-    reach = (rho > rr.x && rho < rr.y && x >= 0.0 && x <= 1.0) ? 1.0 : 0.0;
-    if (reach > 0.5 && fmod(flags, 2.0) > 0.5)
-    {
-        // inverse of the blade easing: smoothstep (own wipers) or cosine (flag 8: the Animated Wipers mod's blades)
-        float tri = (fmod(floor(flags / 8.0), 2.0) > 0.5)
-            ? acos(clamp(1.0 - 2.0 * x, -1.0, 1.0)) / 3.14159265
-            : 0.5 - sin(asin(clamp(1.0 - 2.0 * x, -1.0, 1.0)) / 3.0);
-        float tA = frac((tri - ph) * 0.5 + 1.0) * sweepT;
-        float tB = (1.0 - frac((tri + ph) * 0.5)) * sweepT;
-        float tOut = min(tA, tB);
-        float tBack = max(tA, tB);
-        if (tc >= tBack)
-        {
-            age = tc - tBack;
-            passes = 2.0;
-        }
-        else if (tc >= tOut)
-        {
-            age = tc - tOut;
-            passes = 1.0;
-        }
-        else if (fmod(floor(flags / 2.0), 2.0) > 0.5 && fmod(floor(flags / 4.0), 2.0) > 0.5)
-        {
-            age = tc + period - tBack;                    // back pass of the previous cycle
-        }
-    }
-    return age;
-}
-
-// All blades at once: the most recent pass over q, the passes of this cycle, and whether any blade reaches q.
-void rpWipeAll(float2 q, int nb, float4 bq[4], float2 brr[4], float4 bph, float4 tl, out float wipeAge, out float passSum,
-               out float wiped)
-{
-    wipeAge = 1e6;
-    passSum = 0.0;
-    wiped = 0.0;
-    [unroll]
-    for (int bj = 0; bj < 4; bj++)
-    {
-        if (bj < nb)
-        {
-            float psJ = 0.0, rcJ = 0.0;
-            float agJ = rpWipeAge(q, bq[bj], brr[bj], bph[bj], tl.x, tl.y, tl.z, tl.w, psJ, rcJ);
-            wipeAge = min(wipeAge, agJ);
-            wiped = max(wiped, rcJ);
-            passSum += psJ;
-        }
-    }
-}
-
 // Tangential force (m/s^2) a drop of radius rad resists on glass, as the body droplets: small drops hold on longest.
 float rpWindAdhesion(float rad, float baseRad)
 {
     return 3.75 * pow(baseRad / max(rad, 1e-5), 1.2);
-}
-
-// 1.0: inside the glass outline (convex quad a, b, c, d counter-clockwise, glass metres), soft edge +-soft metres.
-float rpQuadMask(float2 q, float2 a, float2 b, float2 c, float2 d, float soft)
-{
-    float2 v[4] = { a, b, c, d };
-    float m = 1.0;
-    [unroll]
-    for (int i = 0; i < 4; i++)
-    {
-        float2 p0 = v[i];
-        float2 e = v[(i + 1) & 3] - p0;
-        float s = (e.x * (q.y - p0.y) - e.y * (q.x - p0.x)) / max(length(e), 1e-4);   // + = inside
-        m *= smoothstep(-soft, soft, s);
-    }
-    return m;
-}
-
-// 1.0: inside the glass outline from the jbeam frame nodes (up to 12 corners in rpWindP0..5, glass uv, counter-
-// clockwise). q and the soft edge are in glass metres, sc converts uv to metres.
-float rpPolyMask(float2 q, float2 sc, int n, float soft)
-{
-    float2 v[12] = { rpWindP0.xy, rpWindP0.zw, rpWindP1.xy, rpWindP1.zw, rpWindP2.xy, rpWindP2.zw,
-                     rpWindP3.xy, rpWindP3.zw, rpWindP4.xy, rpWindP4.zw, rpWindP5.xy, rpWindP5.zw };
-    float m = 1.0;
-    [unroll]
-    for (int i = 0; i < 12; i++)
-    {
-        if (i < n)
-        {
-            float2 p0 = v[i] * sc;
-            float2 p1 = ((i + 1 < n) ? v[(i + 1) % 12] : v[0]) * sc;
-            float2 e = p1 - p0;
-            float s = (e.x * (q.y - p0.y) - e.y * (q.x - p0.x)) / max(length(e), 1e-4);   // + = inside
-            m *= smoothstep(-soft, soft, s);
-        }
-    }
-    return m;
 }
 
 // 1.0 tunnels: of the time since a blade last passed (age, s), how long rain could land: the time the car spent under
@@ -266,6 +154,15 @@ float rpLandAge(float age)
 {
     float a = min(age, 1e4);
     return max(a - max(0.0, min(a, rpWindI.y) - rpWindN.w), 0.0);
+}
+
+// 1.5 glass water (rp_glass.cs.hlsl) at glass point q (pc units): x the water there (0 dry / just wiped .. 1 beaded all
+// over; more: a line the blades pushed together), y the film a blade left
+float2 rpGlassWater(float2 q, float aspectP)
+{
+    const float m = max(rpWindU.z, 1.0);
+    const float2 r = glassTexTex.SampleLevel(glassTex_sampler_, float2(q.x / aspectP, q.y) / (2.0 * m) + 0.5, 0).rg;
+    return float2(isfinite(r.x) ? max(r.x, 0.0) : 0.0, isfinite(r.y) ? saturate(r.y) : 0.0);
 }
 
 PFX_NUMTHREADS
@@ -337,24 +234,13 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     // Glass outline. From the car's jbeam windshield frame (rpWindI.z = 2): the real outline of the glass. Ray-probed
     // glass (1): its measured size plus a small margin. Estimated plane (0, cockpit only): generous. The depth test
     // below trims all of them to the opening that is really visible.
-    float aperture = 0.0;
-    if (rpWindI.z > 1.5)
-    {
-        float2 sc = float2(halfW, halfH);
-        aperture = (rpWindL.x > 2.5)
-            ? rpPolyMask(uv * sc, sc, int(rpWindL.x + 0.5), 0.02)
-            : rpQuadMask(uv * sc, rpWindJ.xy * sc, rpWindJ.zw * sc, rpWindK.xy * sc, rpWindK.zw * sc, 0.02);
-    }
-    else if (rpWindI.z > 0.5)
-    {
-        aperture = (1.0 - smoothstep(0.97, 1.06, abs(uv.x))) * smoothstep(-1.06, -0.97, uv.y) * (1.0 - smoothstep(0.97, 1.06, uv.y));
-    }
-    else
-    {
-        aperture = (1.0 - smoothstep(1.05, 1.18, abs(uv.x))) * smoothstep(-1.14, -1.00, uv.y) * (1.0 - smoothstep(0.98, 1.10, uv.y));
-    }
+    float aperture = rpPaneAperture(uv, halfW, halfH);
+    // 1.5 glass water: from outside, the body right beside the glass gets the water the blades push or the airflow
+    // blows off it (the water field reaches rpWindU.z half sizes out)
+    const bool useState = rpWindU.y > 0.5;
+    const bool pillarZone = useState && outside && abs(uv.x) < rpWindU.z && abs(uv.y) < rpWindU.z;
     // 1.0: nothing of this pane at this pixel: done before the depth is read (most of the screen; debug views go on)
-    if (aperture < 0.001 && !(rpMode.x > 7.5 && rpMode.x < 8.5) && !(rpMode.x > 15.5 && rpMode.x < 17.5))
+    if (aperture < 0.001 && !pillarZone && !(rpMode.x > 7.5 && rpMode.x < 8.5) && !(rpMode.x > 15.5 && rpMode.x < 17.5))
     {
         pfxOut[storePos] = src;
         return;
@@ -387,8 +273,11 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
         return;
     }
     const float glass = aperture * beyond;
+    // 1.5: the body strip beside the glass (outside views): its surface sits at the glass plane, within a few cm
+    const float onBody = pillarZone ? (1.0 - aperture) * (1.0 - smoothstep(0.03, 0.08, abs(sceneDist - t))) : 0.0;
+    const float glassD = max(glass, onBody);                     // where drops may be drawn
     const bool dbgWipers = (rpMode.x > 16.5 && rpMode.x < 17.5);
-    if (glass < 0.001 && !(rpMode.x > 7.5 && rpMode.x < 8.5) && !(dbgWipers && aperture > 0.001))
+    if (glassD < 0.001 && !(rpMode.x > 7.5 && rpMode.x < 8.5) && !(dbgWipers && aperture > 0.001) && !(rpMode.x > 22.5 && rpMode.x < 23.5))
     {
         pfxOut[storePos] = src;
         return;
@@ -422,38 +311,12 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     const bool atlasOK = rpAtlasValid();
     const float4 tl4 = float4(tc, sweepT, period, flags);
 
-    // Wiper blades: the car's own blades (rpWindQ / rpWindS, measured from its wiper mesh in Lua: any count, pivot,
-    // length, parked angle and sweep direction); otherwise the procedural tandem pair, mirrored for RHD.
-    // 1.0: rpWindL.y = -1: this pane has no wipers at all (the rear / hatch glass pass)
-    int nb = (rpWindL.y < -0.5) ? 0 : int(rpWindL.y + 0.5);
+    // Wiper blades (rp_pane.h.hlsl): the car's own, or the procedural tandem pair mirrored for RHD; none on the rear /
+    // hatch glass without a wiper
     float4 bq[4];
     float2 brr[4];
-    [unroll]
-    for (int bz = 0; bz < 4; bz++)
-    {
-        bq[bz] = float4(0.0, -10.0, 0.0, 1.0);
-        brr[bz] = float2(0.0, 0.0);
-    }
-    if (nb > 0)
-    {
-        bq[0] = rpWindQ0; bq[1] = rpWindQ1; bq[2] = rpWindQ2; bq[3] = rpWindQ3;
-        brr[0] = rpWindS0.xy; brr[1] = rpWindS0.zw; brr[2] = rpWindS1.xy; brr[3] = rpWindS1.zw;
-    }
-    else if (rpWindL.y > -0.5)
-    {
-        nb = 2;
-        float pk = (wSide > 0.0) ? park : 3.14159265 - park;
-        bq[0] = float4(RP_PIVOT0.x * aspectP * wSide, RP_PIVOT0.y, pk, range * wSide);
-        bq[1] = float4(RP_PIVOT1.x * aspectP * wSide, RP_PIVOT1.y, pk, range * wSide);
-        bq[2] = float4(0.0, -10.0, 0.0, 1.0);
-        bq[3] = bq[2];
-        brr[0] = float2(RP_BLADE_R0, RP_BLADE_R1);
-        brr[1] = brr[0];
-        brr[2] = float2(0.0, 0.0);
-        brr[3] = brr[2];
-    }
-    // wiper model: where each blade rests on its arc (0 for the procedural pair)
-    const float4 bph = (rpWindL.y > 0.5) ? rpWindT : float4(0.0, 0.0, 0.0, 0.0);
+    float4 bph;
+    int nb = rpBladeSetup(aspectP, bq, brr, bph);
 
     // Debug 17 (wiper model): each blade's swept sector in its own colour (cyan, yellow, green, magenta; white where two
     // overlap), red stripes = glass no blade ever reaches, white line = where the blade is now, white dot = its pivot.
@@ -591,9 +454,23 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
                     float since = landed - r5 * 2.2;                   // rain-clock units since this bead landed
                     float grow = smoothstep(0.0, 0.25, since) * fadeOut;
                     float rawRad = r0 * (0.40 + 1.45 * r4 * r4);      // many small beads, a few big merged drops
+                    // 1.5 glass water: the water there now decides which beads show - rain landing on wiped glass, water
+                    // running in with gravity and the airflow - instead of each bead's own landing time; where the blades
+                    // pushed the water together (above 1) the drops are big and merged, a bead in nearly every cell
+                    float wat = 1.0;
+                    if (useState)
+                    {
+                        wat = rpGlassWater(cen, aspectP).x;
+                        grow = fadeOut;
+                        rawRad *= 1.0 + 0.7 * saturate(wat - 1.0);
+                    }
                     float adh = rpWindAdhesion(rawRad, r0);
                     float mob = saturate((Fmag - adh) / (adh * 1.5)); // 1 = torn off by the force
-                    float present = saturate((density * (1.0 - 0.9 * mob) - r1) / 0.06);
+                    float present = saturate((density * (1.0 - 0.9 * mob) * min(wat, 1.0) - r1) / 0.06);
+                    if (wat > 1.2)
+                    {
+                        present = max(present, saturate((wat - 1.2) * 2.0) * step(r1, 0.9));
+                    }
                     float radV = max(rawRad, minPx * mppU);
                     float a = grow * present * rpWindDropAlpha(rawRad, radV, hg, outside);
                     if (a > 0.001)
@@ -693,13 +570,21 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
                         if (along < radV * 1.11 * stretchD && along > -max(tlen, 2.46 * radV * stretchD)
                             && abs(across) < radV * 1.3)
                         {
-                            float wipeAge = 1e6, passSum = 0.0, wiped = 0.0;
-                            rpWipeAll(cen, nb, bq, brr, bph, tl4, wipeAge, passSum, wiped);
-                            if (wiped > 0.5)
+                            if (useState)
                             {
-                                // wiped glass: the drop has to land after the last pass where it is now
-                                float del = r5 * 1.5;
-                                a *= smoothstep(del, del + 0.25, rainRate * rpLandAge(wipeAge));
+                                // 1.5: a running drop lives where there is water on the glass now (glass water field)
+                                a *= smoothstep(0.15 + 0.5 * r5, 0.45 + 0.5 * r5, rpGlassWater(cen, aspectP).x);
+                            }
+                            else
+                            {
+                                float wipeAge = 1e6, passSum = 0.0, wiped = 0.0;
+                                rpWipeAll(cen, nb, bq, brr, bph, tl4, wipeAge, passSum, wiped);
+                                if (wiped > 0.5)
+                                {
+                                    // wiped glass: the drop has to land after the last pass where it is now
+                                    float del = r5 * 1.5;
+                                    a *= smoothstep(del, del + 0.25, rainRate * rpLandAge(wipeAge));
+                                }
                             }
                             if (a > 0.001)
                             {
@@ -763,11 +648,22 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     float ruP = saturate(length(pc - pivP) / rOutP);
     float trailG = wiperTexTex.SampleLevel(wiperTex_sampler_, float2(ruP, saturate(ageP / smearT)), 0).g;
     float smear = (1.0 - saturate(ageP / smearT)) * (0.35 + 0.65 * trailG) * glass;
+    // 1.5 glass water: the film the blades really left (streaky; a hazy smear that clears in about a second) and the
+    // water line they pushed to the ends of their sweep (a thin sheet: softens the view along it)
+    float2 gw = float2(0.0, 0.0);
+    if (useState)
+    {
+        gw = rpGlassWater(pc, aspectP);
+        smear = gw.y * glass;
+        trail = max(trail, saturate((gw.x - 1.3) * 0.7));
+    }
     if (haze + smear > 0.002)
     {
-        int br = clamp(int(2.0 + 6.0 * smear), 2, 8);
+        int br = useState ? clamp(int(3.0 + 9.0 * smear), 3, 10) : clamp(int(2.0 + 6.0 * smear), 2, 8);
         float3 soft = rpWindBlur(p, br);
-        col = lerp(col, soft * (1.0 + 0.04 * smear), saturate(haze + smear * 0.55));
+        // the film scatters the light coming through it: a milky veil over the blur, brighter where the view is bright
+        float3 veil = soft * (1.0 + 0.08 * smear) + ((useState ? 0.10 : 0.04) * smear * rpLuma(soft)).xxx;
+        col = lerp(col, veil, saturate(haze + smear * (useState ? 0.95 : 0.55)));
     }
 
     // Wet trails left by running drops: a thin film that softens the view a little.
@@ -783,7 +679,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
         // close to the eye a drop is a little out of focus; from outside it is sharp
         float lod = clamp(log2(max(56.0 / radPx, 1.0)) + (outside ? 0.0 : 1.0), 0.0, 3.0);
         float4 sh = rpWindShape(bestQ, bestTile, lod, atlasOK);
-        float cover = saturate(sh.w * bestA) * glass;
+        float cover = saturate(sh.w * bestA) * glassD;
         if (cover > 0.001)
         {
             // ---- 1.3: the body droplets' optics, 1:1 (rp_droplets.cs.hlsl): refraction, Fresnel, light catch ----------
@@ -930,6 +826,22 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
         col = lerp(col, float3(0.1, 0.8, 1.0) * B, glass);
         col = lerp(col, float3(1.0, 0.8, 0.05) * B, glass * (1.0 - saturate(ageP / 2.0)));
         col = lerp(col, float3(1.0, 1.0, 1.0) * B, saturate(bestA * 2.0) * glass);
+    }
+    if (rpMode.x > 22.5 && rpMode.x < 23.5)
+    {
+        // Debug 23 (1.5 glass water): blue = water on the glass (dark = dry / just wiped), white = the lines the blades
+        // pushed together, yellow = the film behind them, green = the body strip beside the glass; red = no glass water
+        float B = max(rpLuma(src.rgb), 0.05) * 2.0 * rpMode.w;
+        float2 g23 = useState ? rpGlassWater(pc, aspectP) : float2(0.0, 0.0);
+        col = float3(0.06, 0.06, 0.06) * B;
+        col = lerp(col, float3(0.15, 0.45, 1.0) * B, saturate(g23.x) * max(aperture, 0.25));
+        col = lerp(col, float3(1.0, 1.0, 1.0) * B, saturate((g23.x - 1.2) * 1.5));
+        col = lerp(col, float3(1.0, 0.85, 0.1) * B, saturate(g23.y * 1.5));
+        col = lerp(col, float3(0.1, 1.0, 0.3) * B, 0.35 * onBody);
+        if (!useState)
+        {
+            col = lerp(col, float3(1.0, 0.1, 0.1) * B, 0.5 * aperture);
+        }
     }
 
     pfxOut[storePos] = float4(rpSafe(col, src.rgb), src.a);
