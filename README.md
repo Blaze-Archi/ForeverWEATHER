@@ -4,7 +4,7 @@
 
 Falling rain, wet roads, puddles with reflections, node-based hydroplaning, body droplets, rain on the windshield, rear and side windows with real wipers, lens drops, dry tunnels and tyre spray.
 
-A graphics and physics mod for **BeamNG.drive 0.40.x** (version 1.4.0 **Alpha**). Everything is drawn by the mod's own compute
+A graphics and physics mod for **BeamNG.drive 0.40.x** (version 1.5.0 **Alpha**). Everything is drawn by the mod's own compute
 shaders and Lua; it needs no other mod.
 
 > **DX12 and Vulkan only.** DX11 doesn't support SSR on BeamNG.drive currently, and the mod utilizes SSR for the puddles.
@@ -19,15 +19,15 @@ shaders and Lua; it needs no other mod.
 
 ## What it does
 
-- Wet asphalt that darkens and turns glossy with the rain, plus puddles on roads with screen-space reflections, rain ripples and tyre wakes. Water only stands on level ground: no puddles on hills.
+- Wet asphalt that darkens and turns glossy with the rain, plus puddles on roads with screen-space reflections, simulated ripples (every raindrop and tyre makes rings that spread, cross and fade) and tyre wakes. Water only stands on level ground: no puddles on hills.
 - Droplets on every nearby car: round beads, teardrops and elongated running drops that bead, run off with gravity and stream backward with the airflow. Each one is a small lens: clear water that shows an upside-down view of what is around it, and its rim catches bright light (the sky over a dark car, lit streets and lamps at night), so the drops show in the dark too.
-- Rain on your car's windshield, rear / hatch glass and side windows, from the driver's seat and from outside, cleared by automatic rain-sensing wipers. The drops on the glass are lenses like the ones on the paint.
-- Drops on the camera lens all over the screen, blown toward the edges as you drive.
+- Rain on your car's windshield, rear / hatch glass and side windows, from the driver's seat and from outside, cleared by automatic rain-sensing wipers. The drops on the glass are lenses like the ones on the paint. On the windshield and the rear glass the water is simulated: the wipers push it into lines at the ends of their sweep and leave a hazy smear, and the wiped glass fills up again with the rain while the water runs with speed and gravity.
+- Drops on the camera lens all over the screen: round drops that drift and wander as you drive.
 - Node-based hydroplaning (Arcade / Simcade / Sim): the water under each tyre's contact-patch nodes (the road film and exactly the puddles you see) lifts them off the road against the tyre's own pressure and drags them back, so grip fades in deep water at speed and one wheel in a puddle pulls the car.
 - Tunnels, bridges and roofs: the ground under them stays dry and does not reflect, no rain lands on the glass there, the wipers finish a couple of sweeps and stop, and the drops on the cars slowly go (faster the faster you drive).
 - Works together with the "Animated Wipers" mod if you have it (optional; nothing of it is included or changed): the rain sensor uses that mod's own wiper switch, and the glass clears exactly as its blades move.
 - Its own falling rain, drawn on the graphics card instead of BeamNG's particle rain (which costs about 4 ms of CPU time per frame in heavy rain). Each drop refracts the scene behind it like a tiny lens.
-- Tyre spray and wakes in puddles. At night the spray takes the colour of the lights around it: red behind a car from its tail lights, orange under sodium street lamps.
+- Tyre spray and wakes in puddles, and a simulated mist (Navier-Stokes): the spray the air carries off hangs behind the cars, swirls in their wake and fades. At night the spray takes the colour of the lights around it: red behind a car from its tail lights, orange under sodium street lamps.
 - The ground gets wet and dries over time. It can follow the game's own weather, and on the BeamNG.Earth map that map's real weather (the bridge is built in).
 
 **Pause menu > Mods > ForeverWEATHER.** Not sure what to tune? Use the Quick look buttons (Damp / Wet / Storm / Flooded) at the top. Console: `extensions.rainPuddles.openUI()`
@@ -99,6 +99,26 @@ The repository root has the same layout as the zip (`art/`, `lua/`, `mod_info/`,
 copy of it in `mods/unpacked/foreverweather/` also works for development. After editing a shader, rename its folder
 (`shaders/common/postFx/rainPuddlesNN`) and `shaderDir` in `lua/ge/extensions/rainPuddles.lua`, or the game keeps the
 compiled old one.
+
+## What's new in 1.5.0
+
+Simulated water and air.
+
+- **Simulated ripples.** The water in the puddles near you is a simulation: every raindrop makes a ring, a tyre rolling
+  through pushes the water aside, the rings spread, cross and fade. *Puddles > Simulated ripples*.
+- **Navier-Stokes tyre mist.** The fine spray hangs in the air and goes where the air goes: three air layers above the
+  road, simulated as an incompressible fluid every frame. Cars drag the air into a wake with swirls at its sides; a
+  passing car leaves a trail of mist over the road that fades within about 1.5 s. *Tyre spray & wakes > Simulated mist*.
+- **Glass water.** On the windshield and the rear glass the water is simulated: the wiped glass fills up again with the
+  rain while the old water runs off with speed and gravity; the blades push the water into lines of big drops where they
+  turn and park, and onto the body beside the glass; each wipe leaves a hazy, streaky smear that clears in about a
+  second. A sloped rear window stays drier at speed, an upright one (hatchback, SUV) catches rain and spray in the wake.
+- **Lens drops drift.** Round dots that wander across the lens instead of being blown outward into teardrops.
+- **New defaults:** Native PBR + SSR reflections; drops with Light catch 0.5, Fresnel 0 and Refraction 2.5. Values you
+  never changed move to them, values you picked stay.
+- **Fix:** an impossible wheel spin reported by a parked car made the tyre spray cost far more than it should.
+
+Full notes: [docs/history/CHANGES_v1.5.0.md](docs/history/CHANGES_v1.5.0.md).
 
 ## What's new in 1.4.0
 
@@ -203,6 +223,9 @@ Full notes: [docs/history/CHANGES_v1.2.0.md](docs/history/CHANGES_v1.2.0.md).
 - Modded cars whose glass meshes are not named like the official ones fall back to the jbeam windshield frame (or, in the cockpit, an estimated plane) and get no rear-glass drops. Cars without a wiper mesh get generic tandem wipers.
 - BeamNG cars have no wiper motor, so without Animated Wipers the wiper speed comes from the mod's rain sensor and its 'Wiper speed' slider.
 - Very long droplet streaks are capped at extreme speeds to keep the cost bounded.
+- The simulated ripples are off while the 'Surroundings' reflection fallback is in use (they share a texture slot of the puddle pass); the drawn ripples show then.
+- The glass water covers the windshield and the rear glass; the side windows keep the earlier model. A rear wiper was not tested on a car that has one (it uses the front wipers' code).
+- The mist is simulated within about 40 m around the camera (a little ahead of it); spray farther away is the drawn plume only.
 
 ## BeamNG.Earth
 
@@ -221,7 +244,7 @@ the ground gets wet and dries, the puddles and the spray. On every other map it 
 | `lua/ge/extensions/rainPuddlesEarth.lua` | bridge to BeamNG.Earth's real weather (only active on that map) |
 | `lua/vehicle/extensions/rainPuddlesHydroVeh.lua` | hydroplaning, vehicle side: contact-patch nodes, water depth, lift and drag at the physics rate |
 | `lua/vehicle/extensions/` (other files) | wheel / windshield probe, the optional Animated Wipers bridge |
-| `shaders/common/postFx/rainPuddles43/` | compute shaders: puddles + wet ground, body droplets, glass, falling rain, spray, lens |
+| `shaders/common/postFx/rainPuddles63/` | compute shaders: puddles + wet ground, simulated ripples, body droplets, glass + glass water, falling rain, spray + simulated mist, lens |
 | `ui/ui-vue/mods/RainPuddles/` | settings panel (Pause menu > Mods > ForeverWEATHER) |
 | `art/rainPuddles/` | puddle masks (and their raw fields for the physics), droplet atlas, wiper sweep texture |
 | `mod_info/FOREVERWEATHER/` | icon and description for the game's mod manager |
