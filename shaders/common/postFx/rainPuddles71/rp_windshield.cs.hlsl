@@ -954,6 +954,22 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
             // (1.2 drew a fixed white highlight at the upper left of every drop, a milky sky veil over all of it and a
             // wide dark ring, and moved the image behind a drop by 1.6 radii at most: the drops read as bubbles by day and
             // showed nothing at night.)
+            // 1.5.2 clearer big drops (the user's request). Gravity flattens a real drop much bigger than ~3 mm: flat on
+            // top and curved only around its rim, and a flat top neither bends nor flips the view behind it. So a big
+            // round drop keeps its slope only in its rim (the outer 1.1 r0 of it), its middle shows what is behind it
+            // (a weak lens), and how far a round drop bends the view stops growing past the size of a 1.1 r0 drop. Up
+            // to 1.5.1 both grew with the drop: big drops showed a far-off patch of sky and read as white blobs.
+            // (Running teardrops and the slim line drops keep their shape and lens.)
+            const bool roundT = (bestTile < 7.5) || (bestTile > 11.5 && bestTile < 14.5);
+            float flatK = 1.0;
+            if (roundT)
+            {
+                const float rimW = saturate(1.1 * r0 / max(bestR, 1e-6));
+                const float nmag = length(sh.xy);
+                const float nNew = 0.12 * nmag + 0.88 * saturate((nmag - (1.0 - rimW)) / max(rimW, 0.05));
+                flatK = (rimW < 0.999) ? saturate(nNew / max(nmag, 1e-4)) : 1.0;
+                sh.xy *= flatK;
+            }
             float2 nt = sh.xy * float2(1.0, 1.0 / bestStretch);
             float2 nn = nt.x * bestAx + nt.y * bestAy;                    // slope in glass axes (right, up)
             float nz = sqrt(saturate(1.0 - dot(nn, nn)));
@@ -975,7 +991,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
             float2 o0 = float2(0.0, 0.0);
             float2 o1 = float2(0.0, 0.0);
             bool okA = rpProjectFast(prk, pra, prb, offW, o0);
-            float lensScale = ((bestTile > 15.5) ? bestR * (0.18 / 0.56) : bestR) * halfH * bestLensK;   // metres, as the body
+            float lensR = ((bestTile > 15.5) ? bestR * (0.18 / 0.56) : bestR) * bestLensK;
+            float lensScale = (roundT ? min(lensR, 1.1 * r0) : lensR) * halfH;                     // metres, as the body
             bool okB = rpProjectFast(prk, pra, prb, offW + tang * lensScale, o1);
             float lensK = rpWindF.w * (2.0 + 2.6 * thick);
             float2 rOff = (okA && okB) ? -(o1 - o0) * lensK : float2(0.0, 0.0);
@@ -1057,6 +1074,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
             float2 up2 = float2(rpWindC.z, rpWindD.z);
             float2 upT = float2(dot(up2, bestAx), dot(up2, bestAy));
             float caustic = pow(saturate(-dot(bestQ, upT / max(length(upT), 1e-3))), 2.0) * saturate(thick * 1.5) * 0.40;
+            caustic *= flatK;                                              // 1.5.2: a flat middle focuses no light
             // glint: the brightest visible sky (sun side), mirrored from outside, seen through the drop from the seat
             float glint = 0.0;
             float soft = 0.0;
@@ -1073,6 +1091,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
                 soft = pow(cK, 60.0) * skyConf * saturate(thick * 2.0) * 0.5;
             }
 
+            glint *= flatK;                                                // 1.5.2: the flat middle shows the sun as
+            soft *= flatK;                                                 // the glass does, without a second glint
             float3 dcol = refr * float3(0.97, 0.985, 0.99);
             dcol *= 1.0 - (0.35 + 0.12 * saturate(catchK)) * darkRim;
             dcol += refr * caustic;

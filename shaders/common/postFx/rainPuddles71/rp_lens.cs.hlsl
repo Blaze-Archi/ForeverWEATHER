@@ -17,9 +17,14 @@
 //   * landing is uniform, and scaling about the centre keeps it uniform: no clear ring, no crowding at the edges.
 // Shape: a round drop (atlas tiles 0-7) whose half toward the centre is a little longer and narrower: a hint of a teardrop.
 // 1.5 (the user's request, and what wind-tunnel studies of car cameras show: drops on a lens migrate across it and merge,
-// they do not streak): the drops stay round dots and DRIFT - every epoch's drops together, each epoch in a direction of
-// its own (a little down the lens when slow, where gravity wins), plus a slow wobble of every drop - instead of all of
-// them being blown outward from the centre; faster at speed (rpLensE..G: how far since each epoch began).
+// they do not streak): the drops stay round dots.
+// 1.5.2 (the user's request): they land at random and MOVE with the air and gravity. Driving, the air meets the lens at
+// the point it moves toward (the screen's middle when the camera looks where the car goes) and spreads the water out
+// from there: the faster and the farther out, the faster they go. Slow or parked, they slide down the lens. That is one
+// affine map per epoch, x = exp(F) * x_landed + T (Lua integrates F and T; rpLensE..M), so a pixel still maps itself
+// back into each epoch's landing space with one multiply-add. Small drops cling to the glass: they move less than half
+// as much. Every epoch has its own grid offset, so the grids of different epochs never line up into rows.
+// (1.5-1.5.1: every epoch drifted in a random direction of its own.)
 // (Until 1.1.1 the drops lived on a log-polar grid that started outside a clear centre and swept out much faster.)
 
 static const float RP_TILE_IN = 112.0 / 128.0;
@@ -80,6 +85,10 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 
     float dF[12] = { rpLensE.x, rpLensE.y, rpLensE.z, rpLensE.w, rpLensF.x, rpLensF.y, rpLensF.z, rpLensF.w,
                      rpLensG.x, rpLensG.y, rpLensG.z, rpLensG.w };
+    float dX[12] = { rpLensH.x, rpLensH.y, rpLensH.z, rpLensH.w, rpLensI.x, rpLensI.y, rpLensI.z, rpLensI.w,
+                     rpLensJ.x, rpLensJ.y, rpLensJ.z, rpLensJ.w };
+    float dY[12] = { rpLensK.x, rpLensK.y, rpLensK.z, rpLensK.w, rpLensL.x, rpLensL.y, rpLensL.z, rpLensL.w,
+                     rpLensM.x, rpLensM.y, rpLensM.z, rpLensM.w };
 
     float  bestScore = 0.0;
     float2 bestQ = float2(0.0, 0.0);
@@ -92,22 +101,25 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     [unroll]
     for (int k = 0; k < 12; k++)
     {
-        // 1.5: this epoch's drops have drifted together by dF (screen heights) in a direction of their own
         const int ep = ep0 - k;
-        const float aEp = 6.2831853 * rpRand(rpHash3(int3(ep, 77, 9001)));
-        float2 dirEp = float2(cos(aEp), sin(aEp)) + float2(0.0, 0.6 * (1.0 - saturate(rpLensB.y)));
-        dirEp /= max(length(dirEp), 1e-3);
-        const float2 shiftK = dirEp * clamp(dF[k], 0.0, 4.0);
-        const float2 xl = sp - shiftK;                                // landing space: where a drop seen here landed
         [unroll]
         for (int gi = 0; gi < 2; gi++)
         {
-            // cell = 4 x the largest extent of its drops (big: 1.6 R0 x tail 1.45; small: 0.8 R0 x 1.45)
-            const float cs = R0 * ((gi == 0) ? 9.5 : 4.8);
-            int2 c = int2(floor(xl / cs));
+            // 1.5.2: where this epoch's drops have moved since it began. Small drops cling (0.45 of the motion), every
+            // batch moves at a pace of its own (0.6-1.4x) and a quarter of the small ones stay where they landed.
+            const uint hE = rpHash3(int3(ep, gi, 4243));
+            const float rM = rpRand(rpPcg(hE ^ 0x51ED270Bu));
+            const float mob = (gi == 0) ? lerp(0.6, 1.4, rM) : ((rM < 0.25) ? 0.07 : 0.45 * lerp(0.6, 1.4, rM));
+            const float sc = exp(mob * clamp(dF[k], 0.0, 8.0));
+            const float2 shiftK = mob * float2(dX[k], dY[k]);
+            const float2 xl = (sp - shiftK) / sc;                     // landing space: where a drop seen here landed
+            // cell: the biggest drop (1.6 R0 big, 0.8 R0 small) plus its wobble stays inside the middle 70 % of it
+            const float cs = R0 * ((gi == 0) ? 12.8 : 6.5);
+            const float2 offE = float2(rpRand(hE), rpRand(rpPcg(hE ^ 0x9E3779B1u))) * cs;   // this epoch's own grid
+            int2 c = int2(floor((xl - offE) / cs));
             uint h = rpHash3(int3(c.x, c.y, ep * 2 + gi + 7001));
             float r1 = rpRand(h);
-            float pres = saturate((rpLensA.y * ((gi == 0) ? 0.30 : 0.55) - r1) / 0.04);
+            float pres = saturate((rpLensA.y * ((gi == 0) ? 0.54 : 1.0) - r1) / 0.04);
             if (pres > 0.001)
             {
                 float r2 = rpRand(rpPcg(h ^ 0x1B873593u));
@@ -119,10 +131,11 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
                     float r4 = rpRand(rpPcg(h ^ 0x85EBCA6Bu));
                     float r5 = rpRand(rpPcg(h ^ 0x27D4EB2Fu));
                     float r6 = rpRand(rpPcg(h ^ 0x165667B1u));
-                    float2 cl = (float2(c) + 0.25 + 0.5 * float2(r4, r5)) * cs;    // where it landed
+                    float2 cl = (float2(c) + 0.15 + 0.70 * float2(r4, r5)) * cs + offE;   // where it landed
                     float keep = (clearR > 0.001) ? smoothstep(clearR * 0.75, clearR, length(cl)) : 1.0;
-                    // where it has drifted to, with a slow wobble of its own (it stays well inside its cell)
-                    float2 cen = cl + shiftK + 0.06 * cs * float2(sin(age * 1.7 + r4 * 6.2831853), cos(age * 1.3 + r5 * 6.2831853));
+                    // where it has moved to, with a slight wobble of its own (it stays well inside its cell)
+                    float2 cen = cl * sc + shiftK
+                               + 0.12 * R0 * float2(sin(age * 1.7 + r4 * 6.2831853), cos(age * 1.3 + r5 * 6.2831853));
                     float rc = length(cen);
                     float2 radial = (rc > 0.01) ? cen / rc : float2(0.0, 1.0);
                     float2 tangential = float2(-radial.y, radial.x);

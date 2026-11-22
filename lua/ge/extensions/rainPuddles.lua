@@ -26,7 +26,7 @@ local TAG = 'rainPuddles'
 -- shader file changed (measured: edited shaders kept running in their old form across restarts until that cache was
 -- cleared). A new path makes every player's game compile the 1.0 shaders instead of reusing cached 0.9 ones.
 -- Rename the folder again whenever the shaders change in a release.
-local shaderDir = 'shaders/common/postFx/rainPuddles69/'
+local shaderDir = 'shaders/common/postFx/rainPuddles71/'
 local maskDir = '/art/rainPuddles/'
 local wiperMaskPath = maskDir .. 'wiper_sweep.data.png'
 local settingsFile = '/settings/rainPuddles.json'
@@ -328,7 +328,7 @@ local boxes = {}
 local accelState = {}   -- [vehicle id] = last velocity + low-passed acceleration
 local frameDtSim = 0
 local frameId, camFrame = 0, -1
-local VERSION = '1.5.1'
+local VERSION = '1.5.2'
 local MAX_VEH_PUDDLES = 12   -- vehicles kept off the puddle / wet-ground pass (must match rp_puddles.h.hlsl)
 local MAX_VEH_DROPS = 6      -- vehicles with body droplets (must match rp_droplets.h.hlsl)
 local PROFILE_N = 16         -- roof-line samples per vehicle (must match rp_droplets.cs.hlsl)
@@ -3404,13 +3404,16 @@ end
 
 -- camera lens droplets ---------------------------------------------------------------------
 -- 1.2: rain lands all over the lens. The shader is stateless: every drop belongs to the epoch (one unit of the life
--- clock lens.C, which runs faster at speed) in which it landed. The airflow moves every drop outward from the screen
--- centre by exp(flow since it landed), so drops in the middle hardly move and drops near the edges leave the screen;
--- lens.Fh keeps lens.flow at the start of each of the last 16 epochs, and the shader gets the flow since then for the
--- 12 newest (rpLensE..G). Lua integrates flow and clock from a smoothed speed, so speed changes stay smooth.
--- (Until 1.1.1 the drops lived on a log-polar grid that only reached out from a clear centre.)
-local lens = { flow = 0, speed = 0, rain = 0, cover = 0, covered = false, coverAt = -1e9, px = nil, py = nil, pz = nil, active = false,
-               C = 0, ep = 0, Fh = { [0] = 0 } }
+-- clock lens.C, which runs faster at speed) in which it landed. 1.5.2 (the user's request): the drops stay round dots;
+-- driving, they spread out from the point the lens moves toward (the screen's middle when the camera looks where the
+-- car goes), faster with speed and the farther out they are; slow or parked, they slide down the lens. That motion is
+-- the same for every drop of an epoch: x = exp(F) * x_landed + T (screen heights from the middle, y down). Lua keeps F
+-- and T for each of the last 16 epochs (lens.Fe, lens.Tx, lens.Ty) from a smoothed velocity, so speed changes stay
+-- smooth; the shader gets the 12 newest (rpLensE..M).
+-- (1.5-1.5.1: every epoch drifted in a random direction of its own; 1.2-1.4: blown outward from the centre and
+-- stretched into teardrops; until 1.1.1: a log-polar grid that only reached out from a clear centre.)
+local lens = { speed = 0, rain = 0, cover = 0, covered = false, coverAt = -1e9, px = nil, py = nil, pz = nil, active = false,
+               C = 0, ep = 0, Fe = { [0] = 0 }, Tx = { [0] = 0 }, Ty = { [0] = 0 }, vx = 0, vy = 0, vz = 0 }
 
 local function lensSpeedSource(dt)
   if playerBox then return playerBox.speed or 0 end
@@ -3426,6 +3429,15 @@ local function updateLens(dtSim, dtReal)
   if not live then lens.rain = 0 end         -- 1.0.1: after a loading screen the drops gather again from none
   local dt = math.max(tonumber(dtSim) or 0, 0)
   local spd = lensSpeedSource(dt)
+  -- 1.5.2: the lens's own velocity through the air: the player's car, else the free camera's motion
+  local vx, vy, vz = 0, 0, 0
+  if playerBox then
+    vx, vy, vz = playerBox.vx or 0, playerBox.vy or 0, playerBox.vz or 0
+  elseif lens.px and dt > 1e-4 then
+    vx, vy, vz = (cam.x - lens.px) / dt, (cam.y - lens.py) / dt, (cam.z - lens.pz) / dt
+    local l = len3(vx, vy, vz)
+    if l > 80 then vx, vy, vz = vx * 80 / l, vy * 80 / l, vz * 80 / l end
+  end
   lens.px, lens.py, lens.pz = cam.x, cam.y, cam.z
 
   -- Shelter: a roof / bridge / tunnel above the camera stops new rain from reaching the lens.
@@ -3444,19 +3456,43 @@ local function updateLens(dtSim, dtReal)
   end
   if dt > 0 then
     lens.speed = lens.speed + (spd - lens.speed) * (1 - math.exp(-dt / 0.7))       -- smooth speed transitions
+    local kv = 1 - math.exp(-dt / 0.5)
+    lens.vx, lens.vy, lens.vz = lens.vx + (vx - lens.vx) * kv, lens.vy + (vy - lens.vy) * kv, lens.vz + (vz - lens.vz) * kv
     local targetRain = (lens.active and clamp(S.rain, 0, 1) or 0) * (1 - lens.cover)
     lens.rain = lens.rain + (targetRain - lens.rain) * (1 - math.exp(-dt / 1.2))
     local sN = clamp(lens.speed / 35.0, 0, 1.6)
-    -- 1.5: the drops drift (screen heights per second): parked they barely creep, at 60 km/h about a fortieth of the
-    -- screen height per second, at 126 km/h about a twentieth (1.2-1.4: an outward sweep in log-radius units)
-    local rate = 0.006 + S.lensSpeedResponse * 0.05 * (sN ^ 1.2)
-    lens.flow = lens.flow + rate * dt
+    -- 1.5.2: the air meets the lens at the point it moves toward and spreads the water out from there at alpha (1/s;
+    -- 0.5 at 126 km/h with 'Speed drift' 1): with the camera looking where the car goes, that is the screen's middle
+    -- (the horizon ahead for a chase camera that looks a little down). Sideways motion moves the drops across.
+    local vf = dot3(lens.vx, lens.vy, lens.vz, cam.fx, cam.fy, cam.fz)
+    local vr = dot3(lens.vx, lens.vy, lens.vz, cam.rx, cam.ry, cam.rz)
+    local vu = dot3(lens.vx, lens.vy, lens.vz, cam.ux, cam.uy, cam.uz)
+    local kA = clamp(S.lensSpeedResponse or 1, 0, 3) * 0.5 / 35
+    local alpha = kA * math.max(vf, 0)
+    local focal = 0.5 / math.max(math.tan(cam.fov * 0.5), 0.05)                     -- screen heights
+    local bx, by = -kA * focal * vr, kA * focal * vu                                  -- x right, y down
+    -- gravity slides them down the lens (world down as seen on the screen): a twentieth of the screen height per
+    -- second parked, a fifth of that once the airflow holds them
+    local gx, gy = -cam.rz, cam.uz
+    local gl = math.sqrt(gx * gx + gy * gy)
+    if gl > 1e-3 then gx, gy = gx / gl, gy / gl else gx, gy = 0, 1 end
+    local sg = clamp((sN - 0.1) / 0.7, 0, 1)
+    local grav = 0.05 * math.min(gl, 1) * (1 - 0.8 * sg * sg * (3 - 2 * sg))
+    bx, by = bx + grav * gx, by + grav * gy
+    local eA = math.exp(alpha * dt)
+    local gB = (alpha > 1e-6) and ((eA - 1) / alpha) or dt
+    for i = 0, 15 do
+      lens.Fe[i] = math.min((lens.Fe[i] or 0) + alpha * dt, 8)
+      lens.Tx[i] = clamp((lens.Tx[i] or 0) * eA + bx * gB, -500, 500)
+      lens.Ty[i] = clamp((lens.Ty[i] or 0) * eA + by * gB, -500, 500)
+    end
     -- 1.2 life clock: drops dry in 4-11 units; at speed the clock runs up to 2.2x faster (they are blown off sooner)
     lens.C = lens.C + dt * (1 + 1.2 * math.min(sN, 1))
     local guard = 0
     while lens.C >= lens.ep + 1 and guard < 32 do
       lens.ep = lens.ep + 1
-      lens.Fh[lens.ep % 16] = lens.flow
+      local i = lens.ep % 16
+      lens.Fe[i], lens.Tx[i], lens.Ty[i] = 0, 0, 0
       guard = guard + 1
     end
     if lens.C >= lens.ep + 1 then lens.C = lens.ep + 0.999 end   -- after a long hitch: no backlog of epochs
@@ -3469,22 +3505,32 @@ local function lensConsts(fx)
   setCommon(fx)
   local sN = clamp(lens.speed / 35.0, 0, 1)
   local rainC = clamp(lens.rain, 0, 1) ^ 1.15                                           -- light rain stays subtle
-  local density = clamp(S.lensDensity * rainC * (0.55 + 0.45 * sN), 0, 1)              -- more drops at speed
+  -- more drops at speed: the lens sweeps through the rain (1.5.2: up to 3.4x parked at 126 km/h, was 1.8x; the air
+  -- blows them off again)
+  local density = clamp(S.lensDensity * rainC * (0.5 + 1.2 * sN), 0, 1)
   local active = (lens.active and density > 0.001) and 1 or 0
   fx:setShaderConst('$rpLensA', fmt4(S.lensIntensity, density, S.lensSize, S.lensRefraction))
   -- (z: 1.2-1.4 the teardrop stretch; 1.5: the drops stay round)
   fx:setShaderConst('$rpLensB', fmt4(S.lensClearCenter, sN, 1.0, clamp(lens.rain, 0, 1)))
   fx:setShaderConst('$rpLensC', fmt4(clamp(lens.C - lens.ep, 0, 0.9999), lens.ep % 1048576, 0, cam.aspect))
   fx:setShaderConst('$rpLensD', fmt4(0, 0, 0, active))
-  -- drift since the start of each of the 12 newest epochs (0 = the current one)
-  local dF = {}
+  -- 1.5.2: how the drops of each of the 12 newest epochs (0 = the current one) have moved: spread (log) and shift
+  local F, X, Y = {}, {}, {}
   for k = 0, 11 do
-    local f0 = lens.Fh[(lens.ep - k) % 16]
-    dF[k + 1] = clamp(lens.flow - (f0 or lens.flow), 0, 30)
+    local i = (lens.ep - k) % 16
+    F[k + 1] = clamp(lens.Fe[i] or 0, 0, 8)
+    X[k + 1] = lens.Tx[i] or 0
+    Y[k + 1] = lens.Ty[i] or 0
   end
-  fx:setShaderConst('$rpLensE', fmt4(dF[1], dF[2], dF[3], dF[4]))
-  fx:setShaderConst('$rpLensF', fmt4(dF[5], dF[6], dF[7], dF[8]))
-  fx:setShaderConst('$rpLensG', fmt4(dF[9], dF[10], dF[11], dF[12]))
+  fx:setShaderConst('$rpLensE', fmt4(F[1], F[2], F[3], F[4]))
+  fx:setShaderConst('$rpLensF', fmt4(F[5], F[6], F[7], F[8]))
+  fx:setShaderConst('$rpLensG', fmt4(F[9], F[10], F[11], F[12]))
+  fx:setShaderConst('$rpLensH', fmt4(X[1], X[2], X[3], X[4]))
+  fx:setShaderConst('$rpLensI', fmt4(X[5], X[6], X[7], X[8]))
+  fx:setShaderConst('$rpLensJ', fmt4(X[9], X[10], X[11], X[12]))
+  fx:setShaderConst('$rpLensK', fmt4(Y[1], Y[2], Y[3], Y[4]))
+  fx:setShaderConst('$rpLensL', fmt4(Y[5], Y[6], Y[7], Y[8]))
+  fx:setShaderConst('$rpLensM', fmt4(Y[9], Y[10], Y[11], Y[12]))
 end
 
 local WIPER = { park = 0.06, range = 1.75 }   -- tandem blades: parked pointing right, sweep ~100 deg up to the left
@@ -4975,7 +5021,7 @@ M.onVehicleResetted = function(vid)
   -- and ease to a halt after a reset at speed); the body drops' acceleration filter starts again from the new state
   if vid then accelState[vid] = nil end
   if vid and (not playerBox or playerBox.id == vid) then
-    lens.speed = 0
+    lens.speed, lens.vx, lens.vy, lens.vz = 0, 0, 0, 0
     for _, f in ipairs({ windFlow, rearFlow, SIDE.flowL, SIDE.flowR }) do f.speed, f.fa, f.fb, f.vx, f.vy = 0, 0, 0, 0, 0 end
     rainSt.vx, rainSt.vy, rainSt.vz, rainSt.px = 0, 0, 0, nil
   end

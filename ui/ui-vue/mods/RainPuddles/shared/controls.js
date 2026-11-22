@@ -149,7 +149,7 @@ export const SLIDERS = {
     { k: "lensDensity", l: "Maximum density", a: 0, b: 1, st: 0.01, d: 2 },
     { k: "lensSize", l: "Droplet size", a: 0.008, b: 0.06, st: 0.001, d: 3 },
     { k: "lensClearCenter", l: "Clear centre radius", a: 0, b: 0.6, st: 0.01, d: 2, hint: "Keeps the middle of the screen free of drops (screen heights). 0 = rain lands all over the lens." },
-    { k: "lensSpeedResponse", l: "Speed drift", a: 0, b: 3, st: 0.05, d: 2, hint: "How fast driving makes the drops drift across the lens. They stay round dots and wander off; parked they barely move." },
+    { k: "lensSpeedResponse", l: "Speed drift", a: 0, b: 3, st: 0.05, d: 2, hint: "How fast driving blows the drops outward from the point the camera moves toward: the faster, the quicker they go. Slow or parked, they slide down the lens instead." },
     { k: "lensRefraction", l: "Refraction", a: 0, b: 2, st: 0.05, d: 2 },
   ],
   windshield: [

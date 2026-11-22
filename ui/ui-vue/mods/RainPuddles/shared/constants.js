@@ -1,4 +1,4 @@
-export const VERSION = "1.5.1"
+export const VERSION = "1.5.2"
 export const MOD_ROOT = "/ui/ui-vue/mods/RainPuddles"
 export const ROUTE_NAME = "menu.rainPuddles"
 export const ROUTE_SOURCE_ID = "RainPuddles.routes"
