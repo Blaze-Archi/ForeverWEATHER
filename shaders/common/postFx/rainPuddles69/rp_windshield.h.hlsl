@@ -48,6 +48,10 @@ cbuffer perDraw : register(b0)
     uniform float4 rpWindP3; uniform float4 rpWindP4; uniform float4 rpWindP5;   // glass uv, counter-clockwise
     uniform float4 rpWindU;    // 1.3 x light catch of the glass drops (as the beads' rpDropD.w); 1.5 y 1 = glass water
                                // in glassTex, z how far it reaches (glass half sizes, beyond the pane's +-1), w unused
+    uniform float4 rpWindV0;   // 1.5.1 how far the running drops travelled (glass units, x right, y up the glass) in the
+    uniform float4 rpWindV1;   //       last 0.5 s (V0.xy), 1 s (V0.zw), 1.5 s (V1.xy) .. 4 s (V3.zw): the water lines
+    uniform float4 rpWindV2;   //       the blades leave run off along the same path
+    uniform float4 rpWindV3;
 
     // Lighting globals the engine binds BY NAME. The Vulkan shader path does not declare them for us (the working
     // droplets header declares them for the same reason); without them rpSkyColor() fails to compile and the whole

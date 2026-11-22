@@ -108,6 +108,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 
     // ---- the blades: what one swept this frame is gone, with a film left behind, and piles up right ahead of it
     const float flags = rpWindE.w;
+    float inSweep = 0.0;                                             // 1.5.1: some blade's arc covers this texel
     if (fmod(flags, 2.0) > 0.5)
     {
         float4 bq[4];
@@ -134,6 +135,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
                 const float xPrev = rpBladeX(tc - dt, sweepT, bph[b], cosE);
                 const float lo = min(xPrev, xNow);
                 const float hi = max(xPrev, xNow);
+                inSweep = max(inSweep, (rho > brr[b].x && rho < brr[b].y && x >= 0.0 && x <= 1.0) ? 1.0 : 0.0);
                 if (hi - lo > 1e-5)
                 {
                     if (rho > brr[b].x && rho < brr[b].y && x >= lo && x <= hi)
@@ -167,6 +169,11 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
         }
         W = (swept > 0.5) ? 0.0 : W + gain;
     }
+
+    // ---- 1.5.1: the water a blade pushed into a line beyond the end of its sweep runs off (the windshield pass draws its
+    // drops letting go and running away): it no longer piles up there sweep after sweep. (Inside the sweep, water above
+    // 1 is the bulge a blade is carrying: the blade takes it along.)
+    W = (W > 1.0 && inSweep < 0.5) ? 1.0 + (W - 1.0) * exp(-dt * (0.8 + 2.5 * mob)) : W;
 
     // ---- the film beads up and dries in about a second (quicker in the airflow)
     S *= exp(-dt * (1.0 + rpWindG.x / 25.0) / 1.2);

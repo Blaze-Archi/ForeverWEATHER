@@ -165,6 +165,53 @@ float2 rpGlassWater(float2 q, float aspectP)
     return float2(isfinite(r.x) ? max(r.x, 0.0) : 0.0, isfinite(r.y) ? saturate(r.y) : 0.0);
 }
 
+// 1.5.1: how far the running drops travelled in the last T seconds (glass units; rpWindV: every 0.5 s back to 4 s,
+// linear between; longer ago at the speed they have now)
+float2 rpTravel(float T)
+{
+    const float s = clamp(T, 0.0, 4.0) * 2.0;
+    float2 d = rpWindV0.xy * saturate(s);
+    d += (rpWindV0.zw - rpWindV0.xy) * saturate(s - 1.0);
+    d += (rpWindV1.xy - rpWindV0.zw) * saturate(s - 2.0);
+    d += (rpWindV1.zw - rpWindV1.xy) * saturate(s - 3.0);
+    d += (rpWindV2.xy - rpWindV1.zw) * saturate(s - 4.0);
+    d += (rpWindV2.zw - rpWindV2.xy) * saturate(s - 5.0);
+    d += (rpWindV3.xy - rpWindV2.zw) * saturate(s - 6.0);
+    d += (rpWindV3.zw - rpWindV3.xy) * saturate(s - 7.0);
+    d += rpWindO.zw * max(T - 4.0, 0.0);
+    return isfinite(d.x + d.y) ? d : float2(0.0, 0.0);
+}
+
+// 1.5.1 water lines, per set of drops (0 the ones that stay on the line, 1..3 runners): travel x the running drops'
+// when they creep (big drops slide much faster than the small running ones; in a strong airflow everything is fast and
+// the factor drops toward 1), seconds before they let go, cell length and radius range (x the base drop radius), share
+// of cells with a drop
+static const float RP_LINE_M[4] = { 0.0, 1.5, 3.0, 5.0 };
+static const float RP_LINE_TAU[4] = { 0.0, 0.4, 0.2, 0.06 };
+static const float RP_LINE_CELL[4] = { 5.0, 6.0, 7.0, 8.0 };
+static const float RP_LINE_RLO[4] = { 0.7, 0.9, 1.1, 1.3 };
+static const float RP_LINE_RHI[4] = { 1.6, 1.8, 2.0, 2.3 };
+static const float RP_LINE_WANT[4] = { 0.45, 0.2, 0.16, 0.12 };
+
+// Drop k of set cls in the line blade b left at end e (generation gen): where along the blade (rho, pc units from its
+// pivot), how far beyond its arc (off), its radius and whether it is there. The blade brings more water toward its tip,
+// where it swept a longer arc (wCol: how wet that arc was).
+void rpLineDrop(int k, float gen, int b, int e, int cls, float cell, float lw, float r0, float density, float2 rr,
+                float rngAbs, float wCol, out float rho, out float off, out float rad, out float pres, out uint h)
+{
+    h = rpHash3(int3(k, int(gen) * 8 + b * 2 + e, 6007 + cls * 131));
+    const float r1 = rpRand(h);
+    const float r2 = rpRand(rpPcg(h ^ 0x1B873593u));
+    const float r3 = rpRand(rpPcg(h ^ 0xE6546B64u));
+    const float r4 = rpRand(rpPcg(h ^ 0x85EBCA6Bu));
+    rho = (float(k) + 0.2 + 0.6 * r2) * cell;
+    off = lw * (0.15 + 0.7 * r3);
+    const float loadN = saturate(wCol * rho * rngAbs / 1.1);
+    rad = r0 * lerp(RP_LINE_RLO[cls], RP_LINE_RHI[cls], r4 * r4) * (0.75 + 0.35 * sqrt(loadN));
+    const float want = RP_LINE_WANT[cls] * saturate(density * 1.4) * smoothstep(0.03, 0.4, loadN);
+    pres = (rho > rr.x && rho < rr.y + 0.01) ? saturate((want - r1) / 0.05) : 0.0;
+}
+
 PFX_NUMTHREADS
 void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
@@ -411,6 +458,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     float bestA = 0.0;
     float bestTile = 0.0;
     float bestStretch = 1.0;
+    float bestLensK = 1.0;                                       // 1.5.1: x the lens size (flat line water: less)
     float trail = 0.0;
 
     // ---- beads: land, stick, creep toward the force, let go once it beats their adhesion -----------------------------
@@ -455,19 +503,21 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
                     float grow = smoothstep(0.0, 0.25, since) * fadeOut;
                     float rawRad = r0 * (0.40 + 1.45 * r4 * r4);      // many small beads, a few big merged drops
                     // 1.5 glass water: the water there now decides which beads show - rain landing on wiped glass, water
-                    // running in with gravity and the airflow - instead of each bead's own landing time; where the blades
-                    // pushed the water together (above 1) the drops are big and merged, a bead in nearly every cell
+                    // running in with gravity and the airflow - instead of each bead's own landing time. Where a blade
+                    // is pushing the water together right now (above 1, inside its sweep) the drops are big and merged.
+                    // (1.5.1: the line it leaves beyond the end of its sweep is drawn below as water lines whose drops
+                    // run off; up to 1.5.0 it was big beads here that only ever faded in place.)
                     float wat = 1.0;
                     if (useState)
                     {
                         wat = rpGlassWater(cen, aspectP).x;
                         grow = fadeOut;
-                        rawRad *= 1.0 + 0.7 * saturate(wat - 1.0);
+                        rawRad *= 1.0 + 0.7 * saturate(wat - 1.0) * wiped;
                     }
                     float adh = rpWindAdhesion(rawRad, r0);
                     float mob = saturate((Fmag - adh) / (adh * 1.5)); // 1 = torn off by the force
                     float present = saturate((density * (1.0 - 0.9 * mob) * min(wat, 1.0) - r1) / 0.06);
-                    if (wat > 1.2)
+                    if (wat > 1.2 && wiped > 0.5)
                     {
                         present = max(present, saturate((wat - 1.2) * 2.0) * step(r1, 0.9));
                     }
@@ -495,6 +545,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
                             bestA = a;
                             bestStretch = 1.0;
                             bestTile = (r4 > 0.82) ? (12.0 + floor(r6 * 2.999)) : floor(frac(r6 * 13.7) * 7.999);
+                            bestLensK = 1.0;
                         }
                     }
                 }
@@ -611,6 +662,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
                                         bestA = a;
                                         bestStretch = stretchD;
                                         bestTile = 8.0 + floor(r5 * 3.999);
+                                        bestLensK = 1.0;
                                     }
                                 }
                                 else
@@ -629,6 +681,222 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
                                         bestA = a;
                                         bestStretch = sy;
                                         bestTile = floor(frac(r5 * 13.7) * 7.999);
+                                        bestLensK = 1.0;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- 1.5.1 water lines. Where a blade turns or parks it leaves the water it pushed along as a line of big drops just
+    // beyond its sweep (more toward its tip, where it swept a longer arc). Up to 1.5.0 they stayed there as beads; now
+    // the biggest let go first and run off with gravity, the airflow and the car's inertia along the path the running
+    // drops really took (rpTravel), each leaving a wet trail, while the small ones stay on the line until the blade comes
+    // back (at speed most of it is blown away). Per line: the drops that stay, three sets of runners (bigger = earlier
+    // and faster) and the runners of the line before, still on their way.
+    float lineA = 0.0;                                            // (debug 23)
+    if (useState && nb > 0 && fmod(flags, 2.0) > 0.5)
+    {
+        const float lw = 0.012 / halfH;                           // as wide as the band the blade leaves it in
+        const float lifeR = min(2.0 * period, 6.0);               // runners are gone before two lines later
+        const bool prevOK = fmod(floor(flags / 2.0), 2.0) > 0.5 && fmod(floor(flags / 4.0), 2.0) > 0.5;
+        const float blown = smoothstep(0.03, 0.2, length(rpTravel(1.0)));   // strong airflow: the line does not stay
+        [loop]
+        for (int bL = 0; bL < nb; bL++)
+        {
+            const float4 blL = bq[bL];
+            const float2 rrL = brr[bL];
+            const float rngL = (blL.w >= 0.0) ? max(blL.w, 1e-3) : min(blL.w, -1e-3);
+            [loop]
+            for (int eL = 0; eL < 2; eL++)
+            {
+                float genL = 0.0;
+                const float ageL = rpLineAge(float(eL), bph[bL], tc, sweepT, period, flags, gen0, genL);
+                const float thL = blL.z + float(eL) * rngL;
+                const float2 uL = float2(cos(thL), sin(thL));                     // along the blade, out from its pivot
+                const float2 nL = float2(-uL.y, uL.x) * (sign(rngL) * ((eL == 1) ? 1.0 : -1.0));   // away from its arc
+                // how wet the arc was that it swept: the rain since it last passed there (the pause before the out sweep)
+                const float wCol = 1.0 - exp(-0.45 * rainRate * ((eL == 1) ? (period - 0.5 * sweepT) : 0.5 * sweepT));
+                // can any drop of this line reach this pixel? (the fastest runners, of this line and the one before)
+                const float2 relL = pc - blL.xy;
+                const float alL = clamp(dot(relL, uL), rrL.x, rrL.y);
+                const float reachL = RP_LINE_M[3] * max(length(rpTravel(ageL)), length(rpTravel(ageL + period)))
+                                   + lw + 14.0 * r0;
+                if (ageL < 1e5 && length(relL - alL * uL) < reachL)
+                {
+                    [loop]
+                    for (int sL = 0; sL < 7; sL++)
+                    {
+                        const int cls = (sL <= 3) ? sL : sL - 3;
+                        const bool prevL = (sL >= 4);
+                        const float ageC = ageL + (prevL ? period : 0.0);
+                        const float genC = genL - (prevL ? 2.0 : 0.0);
+                        const float fadeC = (cls == 0) ? (1.0 - smoothstep(8.0, 20.0, ageC)) * (1.0 - 0.8 * blown)
+                                                       : 1.0 - smoothstep(0.55 * lifeR, lifeR, ageC);
+                        if (fadeC > 0.001 && (!prevL || prevOK))
+                        {
+                            const float cellC = r0 * RP_LINE_CELL[cls];
+                            const float runT = (cls > 0) ? max(ageC - RP_LINE_TAU[cls], 0.0) : 0.0;   // running for (s)
+                            const float2 dRef = rpTravel(runT);
+                            const float vAvg = length(dRef) * halfH / max(runT, 0.05);             // m/s over the run
+                            const float mC = (cls > 0) ? 1.0 + (RP_LINE_M[cls] - 1.0) / (1.0 + vAvg / 0.15) : 0.0;
+                            const float2 dC = mC * dRef;
+                            const float dLen = length(dC);
+                            // a runner slides head first with a short tail, drawn out more the faster it goes
+                            const float stretchC = (cls > 0) ? 1.0 + (0.6 + 1.6 * (1.0 - exp(-mC * vmag * 2.0))) * smoothstep(0.0, 0.25, runT) : 1.0;
+                            const float radHi = r0 * RP_LINE_RHI[cls] * 1.2;
+                            const float tailC = 2.46 * radHi * stretchC * 1.2;
+                            const float2 relC = pc - dC - blL.xy;
+                            const float alC = dot(relC, uL);
+                            const float acC = dot(relC, nL);
+                            const float extC = tailC + radHi * 1.3;
+                            if (acC > -extC && acC < lw + extC && alC > rrL.x - extC && alC < rrL.y + 0.01 + extC)
+                            {
+                                const float extA = abs(dot(mdir, uL)) * tailC + radHi * 1.3;   // reach along the line
+                                const int kLo = int(floor((alC - extA) / cellC));
+                                const int kHi = min(int(floor((alC + extA) / cellC)), kLo + 4);
+                                [loop]
+                                for (int kC = kLo; kC <= kHi; kC++)
+                                {
+                                    float rhoK = 0.0, offK = 0.0, radK = r0, presK = 0.0;
+                                    uint hK = 0u;
+                                    rpLineDrop(kC, genC, bL, eL, cls, cellC, lw, r0, density, rrL, abs(rngL), wCol,
+                                               rhoK, offK, radK, presK, hK);
+                                    float radV = max(radK, minPx * mppU);
+                                    float a = presK * fadeC * rpWindDropAlpha(radK, radV, hK, outside);
+                                    if (a > 0.001)
+                                    {
+                                        float r5 = rpRand(rpPcg(hK ^ 0x27D4EB2Fu));
+                                        float r6 = rpRand(rpPcg(hK ^ 0x165667B1u));
+                                        float2 cen = blL.xy + rhoK * uL + offK * nL + dC;
+                                        // a runner meanders a little across its path
+                                        float2 sideD = (dLen > 1e-5) ? float2(-dC.y, dC.x) / dLen : nL;
+                                        cen += sideD * (sin(dLen / (radK * 3.0) + r5 * 6.2831853) * 0.25 * radK * saturate(dLen / radK));
+                                        float2 dd = pc - cen;
+                                        if (runT > 0.0 && dLen > 1e-5)
+                                        {
+                                            float along = dot(dd, mdir);
+                                            float across = dot(dd, mside);
+                                            float stC = stretchC * (0.8 + 0.4 * r6);              // each its own length
+                                            if (along < radV * 1.11 * stC && along > -2.46 * radV * stC && abs(across) < radV * 1.3)
+                                            {
+                                                // gone where a blade swept it (it was already there when the blade passed)
+                                                float wA = 1e6, wP = 0.0, wR = 0.0;
+                                                rpWipeAll(cen, nb, bq, brr, bph, tl4, wA, wP, wR);
+                                                if (wA < ageC && length(mC * rpTravel(min(wA, runT))) < radV * 1.5)
+                                                {
+                                                    a = 0.0;
+                                                }
+                                                // the wet trail right behind it
+                                                float tl = radK * (2.0 + 4.0 * (stC - 1.0));
+                                                float tpar = saturate(-along / max(tl, 1e-5));
+                                                trail = max(trail, step(along, 0.0) * step(-along, tl) * (1.0 - tpar) * a
+                                                                   * (1.0 - smoothstep(0.6, 1.0, abs(across) / (radK * 0.45))));
+                                                if (frac(r5 * 7.31) < 0.6 + 0.35 * smoothstep(1.8, 3.0, stC))
+                                                {
+                                                    // a slim line swelling into a round head (tiles 16-19, as the body droplet
+                                                    // streams): the head 0.7 x the radius, the tile drawn out by stC / 2.7
+                                                    float Se = stC / 2.7;
+                                                    float sE = 0.7 * radV / 0.18;
+                                                    float2 q = float2(across / sE, along / (sE * Se) + 0.70);
+                                                    float2 hq = float2(q.x, q.y - 0.70) / 0.18;
+                                                    float tT = saturate((q.y + 0.95) / 1.65);
+                                                    float wT = 0.012 + 0.168 * tT * sqrt(tT);
+                                                    float inTail = step(-0.95, q.y) * step(q.y, 0.70) * step(abs(q.x), wT);
+                                                    float score = max(1.0 - dot(hq, hq), 0.25 * inTail) * a;
+                                                    if (max(abs(q.x), abs(q.y)) < 1.0 && score > bestScore)
+                                                    {
+                                                        bestScore = score;
+                                                        bestQ = q;
+                                                        bestAx = mside;
+                                                        bestAy = mdir;
+                                                        bestR = sE;
+                                                        bestA = a;
+                                                        bestStretch = Se;
+                                                        bestTile = 16.0 + floor(r5 * 3.999);
+                                                        bestLensK = min(1.0, 1.1 * r0 / radV);
+                                                        lineA = max(lineA, a);
+                                                    }
+                                                }
+                                                else
+                                                {
+                                                    // teardrop tile: head toward the motion, tail behind (as the running drops)
+                                                    float sT = radV / 0.56;
+                                                    float2 q = float2(across / sT, along / (sT * stC) + 0.38);
+                                                    float2 hq = float2(q.x, q.y - 0.38) / 0.56;
+                                                    float inTail = step(-0.97, q.y) * step(q.y, 0.38) * step(abs(q.x), 0.56 * saturate((q.y + 0.97) / 1.35));
+                                                    float score = max(1.0 - dot(hq, hq), 0.25 * inTail) * a;
+                                                    if (max(abs(q.x), abs(q.y)) < 1.0 && score > bestScore)
+                                                    {
+                                                        bestScore = score;
+                                                        bestQ = q;
+                                                        bestAx = mside;
+                                                        bestAy = mdir;
+                                                        bestR = sT;
+                                                        bestA = a;
+                                                        bestStretch = stC;
+                                                        bestTile = 8.0 + floor(r5 * 3.999);
+                                                        bestLensK = min(1.0, 1.1 * r0 / radV);
+                                                        lineA = max(lineA, a);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        else
+                                        {
+                                            // still on the line: a merged drop, drawn out a little along it
+                                            float asp = 1.15 + 0.6 * r6;
+                                            float2 q = float2(dot(dd, nL) / radV, dot(dd, uL) / (radV * asp));
+                                            q = rpDropWarp(q, rpRand4(rpPcg(hK ^ 0x3C6EF372u)), 0.6);
+                                            float rr = dot(q, q);
+                                            float score = (1.0 - rr) * a;
+                                            if (rr < 1.0 && score > bestScore)
+                                            {
+                                                float wA = 1e6, wP = 0.0, wR = 0.0;
+                                                rpWipeAll(cen, nb, bq, brr, bph, tl4, wA, wP, wR);
+                                                if (wA >= ageC)
+                                                {
+                                                    bestScore = score;
+                                                    bestQ = q;
+                                                    bestAx = nL;
+                                                    bestAy = uL;
+                                                    bestR = radV;
+                                                    bestA = a;
+                                                    bestStretch = asp;
+                                                    bestTile = 12.0 + floor(r6 * 2.999);
+                                                    bestLensK = min(1.0, 1.1 * r0 / radV);     // flat water
+                                                    lineA = max(lineA, a);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            // the wet trail a runner leaves: back along this set's travel to the line, whose drop ran here
+                            if (cls > 0 && dLen > 2.0 * r0)
+                            {
+                                const float2 relT = pc - blL.xy - (0.5 * lw) * nL;
+                                const float det = uL.x * dC.y - uL.y * dC.x;
+                                if (abs(det) > 0.35 * dLen)
+                                {
+                                    const float rho0 = (relT.x * dC.y - relT.y * dC.x) / det;
+                                    const float lam = (uL.x * relT.y - uL.y * relT.x) / det;
+                                    if (lam > 0.0 && lam < 1.0)
+                                    {
+                                        float rhoT = 0.0, offT = 0.0, radT = r0, presT = 0.0;
+                                        uint hT = 0u;
+                                        rpLineDrop(int(floor(rho0 / cellC)), genC, bL, eL, cls, cellC, lw, r0, density, rrL,
+                                                   abs(rngL), wCol, rhoT, offT, radT, presT, hT);
+                                        // laid when the drop passed here; wiped if a blade passed this pixel since
+                                        if (presT > 0.001 && ageP > runT * (1.0 - lam))
+                                        {
+                                            float wT = 1.0 - smoothstep(0.25, 0.45, abs(rho0 - rhoT) / radT);
+                                            trail = max(trail, presT * fadeC * wT * (0.3 + 0.7 * lam));
+                                        }
                                     }
                                 }
                             }
@@ -649,13 +917,13 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     float trailG = wiperTexTex.SampleLevel(wiperTex_sampler_, float2(ruP, saturate(ageP / smearT)), 0).g;
     float smear = (1.0 - saturate(ageP / smearT)) * (0.35 + 0.65 * trailG) * glass;
     // 1.5 glass water: the film the blades really left (streaky; a hazy smear that clears in about a second) and the
-    // water line they pushed to the ends of their sweep (a thin sheet: softens the view along it)
+    // water line they pushed to the ends of their sweep (a thin sheet that drains with it: softens the view along it)
     float2 gw = float2(0.0, 0.0);
     if (useState)
     {
         gw = rpGlassWater(pc, aspectP);
         smear = gw.y * glass;
-        trail = max(trail, saturate((gw.x - 1.3) * 0.7));
+        trail = max(trail, 0.6 * saturate((gw.x - 1.2) * 0.5));
     }
     if (haze + smear > 0.002)
     {
@@ -707,7 +975,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
             float2 o0 = float2(0.0, 0.0);
             float2 o1 = float2(0.0, 0.0);
             bool okA = rpProjectFast(prk, pra, prb, offW, o0);
-            float lensScale = ((bestTile > 15.5) ? bestR * (0.18 / 0.56) : bestR) * halfH;   // metres, as the body
+            float lensScale = ((bestTile > 15.5) ? bestR * (0.18 / 0.56) : bestR) * halfH * bestLensK;   // metres, as the body
             bool okB = rpProjectFast(prk, pra, prb, offW + tang * lensScale, o1);
             float lensK = rpWindF.w * (2.0 + 2.6 * thick);
             float2 rOff = (okA && okB) ? -(o1 - o0) * lensK : float2(0.0, 0.0);
@@ -830,7 +1098,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     if (rpMode.x > 22.5 && rpMode.x < 23.5)
     {
         // Debug 23 (1.5 glass water): blue = water on the glass (dark = dry / just wiped), white = the lines the blades
-        // pushed together, yellow = the film behind them, green = the body strip beside the glass; red = no glass water
+        // pushed together, yellow = the film behind them, green = the body strip beside the glass; red = no glass water;
+        // 1.5.1 magenta = the drops of those lines (staying and running off)
         float B = max(rpLuma(src.rgb), 0.05) * 2.0 * rpMode.w;
         float2 g23 = useState ? rpGlassWater(pc, aspectP) : float2(0.0, 0.0);
         col = float3(0.06, 0.06, 0.06) * B;
@@ -838,6 +1107,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
         col = lerp(col, float3(1.0, 1.0, 1.0) * B, saturate((g23.x - 1.2) * 1.5));
         col = lerp(col, float3(1.0, 0.85, 0.1) * B, saturate(g23.y * 1.5));
         col = lerp(col, float3(0.1, 1.0, 0.3) * B, 0.35 * onBody);
+        col = lerp(col, float3(1.0, 0.2, 0.9) * B, saturate(lineA * 1.5));
         if (!useState)
         {
             col = lerp(col, float3(1.0, 0.1, 0.1) * B, 0.5 * aperture);

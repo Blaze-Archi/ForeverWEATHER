@@ -181,4 +181,32 @@ float rpBladeX(float tc, float sweepT, float ph, bool cosEase)
     return cosEase ? 0.5 - 0.5 * cos(3.14159265 * tri) : tri * tri * (3.0 - 2.0 * tri);
 }
 
+// 1.5.1: seconds since a blade (phase ph) last came in to end e of its arc (0 = its start, where it parks; 1 = the far
+// end) and turned or parked there, leaving the water it had pushed along as a line; gen tells those lines apart (gen0 =
+// the passes before this cycle, two per cycle). 1e6 = no line yet.
+float rpLineAge(float e, float ph, float tc, float sweepT, float period, float flags, float gen0, out float gen)
+{
+    gen = 0.0;
+    if (fmod(flags, 2.0) < 0.5)
+    {
+        return 1e6;
+    }
+    // the moments it is at tri = e (rpWipeAge's two solutions: one at the far end; at the parked end the start and the
+    // end of the cycle): it comes in at the later one
+    const float tA = frac((e - ph) * 0.5 + 1.0) * sweepT;
+    const float tB = (1.0 - frac((e + ph) * 0.5)) * sweepT;
+    const float tL = max(tA, tB);
+    if (tc >= tL)
+    {
+        gen = gen0 + e;
+        return tc - tL;
+    }
+    if (fmod(floor(flags / 2.0), 2.0) > 0.5 && fmod(floor(flags / 4.0), 2.0) > 0.5)
+    {
+        gen = gen0 - 2.0 + e;                                         // the line of the previous cycle
+        return tc + period - tL;
+    }
+    return 1e6;
+}
+
 #endif

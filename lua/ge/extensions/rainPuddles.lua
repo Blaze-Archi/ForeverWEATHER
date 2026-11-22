@@ -26,7 +26,7 @@ local TAG = 'rainPuddles'
 -- shader file changed (measured: edited shaders kept running in their old form across restarts until that cache was
 -- cleared). A new path makes every player's game compile the 1.0 shaders instead of reusing cached 0.9 ones.
 -- Rename the folder again whenever the shaders change in a release.
-local shaderDir = 'shaders/common/postFx/rainPuddles63/'
+local shaderDir = 'shaders/common/postFx/rainPuddles69/'
 local maskDir = '/art/rainPuddles/'
 local wiperMaskPath = maskDir .. 'wiper_sweep.data.png'
 local settingsFile = '/settings/rainPuddles.json'
@@ -328,7 +328,7 @@ local boxes = {}
 local accelState = {}   -- [vehicle id] = last velocity + low-passed acceleration
 local frameDtSim = 0
 local frameId, camFrame = 0, -1
-local VERSION = '1.5.0'
+local VERSION = '1.5.1'
 local MAX_VEH_PUDDLES = 12   -- vehicles kept off the puddle / wet-ground pass (must match rp_puddles.h.hlsl)
 local MAX_VEH_DROPS = 6      -- vehicles with body droplets (must match rp_droplets.h.hlsl)
 local PROFILE_N = 16         -- roof-line samples per vehicle (must match rp_droplets.cs.hlsl)
@@ -3550,6 +3550,7 @@ local function glassConsts(fx, W, flow, wip)
   -- 1.0: the drops move like the body droplets (force, running-drop travel and speed, life clock; see updateGlassFlow)
   fx:setShaderConst('$rpWindN', fmt4(flow.fa, flow.fb, flow.life, shB))      -- w (1.0): out from under it since
   fx:setShaderConst('$rpWindO', fmt4(flow.ox, flow.oy, flow.vx, flow.vy))
+  WAVE.travelConsts(fx, flow)                                         -- 1.5.1 rpWindV0..3
   local windshield = W     -- (the code below reads the pane under this name)
   if quad then
     fx:setShaderConst('$rpWindJ', fmt4(quad[1], quad[2], quad[3], quad[4]))   -- bottom-left, bottom-right (glass uv)
@@ -3644,6 +3645,53 @@ function WAVE.glassUpdate()
         g.fresh = g.fresh - 1
       end
     end
+  end
+end
+
+-- 1.5.1 water lines: the running drops' travel over the last ~4.8 s (a ring of samples every 0.1 s, never folded), so
+-- the big drops a blade leaves at the end of its sweep run off along the path the water really took since
+function WAVE.travelStep(flow, dt)
+  local h = flow.th
+  if not h then
+    h = { n = 0, i = 0, t = {}, x = {}, y = {}, now = 0, cx = 0, cy = 0 }
+    flow.th = h
+  end
+  h.now = h.now + dt
+  h.cx, h.cy = h.cx + (flow.vx or 0) * dt, h.cy + (flow.vy or 0) * dt
+  if h.n == 0 or h.now - h.t[h.i] >= 0.1 then
+    h.i = h.i % 48 + 1
+    h.t[h.i], h.x[h.i], h.y[h.i] = h.now, h.cx, h.cy
+    h.n = math.min(h.n + 1, 48)
+  end
+end
+
+-- how far they went in the last 0.5, 1 .. 4 s (glass units, x right, y up the glass): rpWindV0..3
+function WAVE.travelConsts(fx, flow)
+  local h = flow and flow.th
+  local v = {}
+  for k = 1, 8 do
+    local dx, dy = 0, 0
+    if h and h.n > 0 then
+      local target = h.now - 0.5 * k
+      local t1, x1, y1 = h.now, h.cx, h.cy
+      local px, py
+      for j = 0, h.n - 1 do
+        local idx = (h.i - 1 - j) % 48 + 1
+        local t0 = h.t[idx]
+        if t0 <= target then
+          local f = (t1 > t0) and (target - t0) / (t1 - t0) or 0
+          px, py = h.x[idx] + (x1 - h.x[idx]) * f, h.y[idx] + (y1 - h.y[idx]) * f
+          break
+        end
+        t1, x1, y1 = t0, h.x[idx], h.y[idx]
+      end
+      if not px then px, py = x1, y1 end                                -- older than the ring: its oldest sample
+      dx, dy = h.cx - px, h.cy - py
+    end
+    v[2 * k - 1], v[2 * k] = dx, dy
+  end
+  for i = 0, 3 do
+    fx:setShaderConst('$rpWindV' .. i, fmt4(v[4 * i + 1], v[4 * i + 2], v[4 * i + 3], v[4 * i + 4]))
   end
 end
 
@@ -4306,6 +4354,8 @@ local function updateWindFlow(dtSim)
   if dt <= 0 then return end
   updateGlassFlow(windFlow, windshield, dt, 1.0, 1.0)
   updateGlassFlow(rearFlow, rearGlass, dt, 0.3, 0.15, true)   -- 1.0: rear / hatch glass, in the car's wake
+  WAVE.travelStep(windFlow, dt)                               -- 1.5.1: the path the water took (water lines)
+  WAVE.travelStep(rearFlow, dt)
   updateGlassFlow(SIDE.flowL, SIDE.L, dt, 0.8, 0.2)         -- 1.0: side windows, the air runs along them
   updateGlassFlow(SIDE.flowR, SIDE.R, dt, 0.8, 0.2)
 end
