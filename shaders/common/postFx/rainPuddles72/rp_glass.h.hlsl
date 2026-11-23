@@ -5,7 +5,8 @@
 
 // 1.5 glass water (rp_glass.cs.hlsl): the water on the windshield as a field over the pane and a margin around it, in
 // glass coordinates (it moves with the car). Targets #rpGlassA / #rpGlassB, 256 x 128 half floats: x water (0 dry ..
-// 1 beaded all over; more = a line the blades pushed together, up to 4), y the film a blade left (0..1).
+// 1 beaded all over; more = a line the blades pushed together, up to 4), y the film a blade left (0..1), z (1.6) the
+// mist on the outside of the glass (0 clear .. 1.5 fogged over).
 Texture2D<float4> glassPrev : register(t0);   // the step: #rpGlassB (last frame); the copy: #rpGlassA (this step)
 
 cbuffer perDraw : register(b0)
@@ -14,6 +15,8 @@ cbuffer perDraw : register(b0)
     uniform float4 rpGlassA;    // x frame time (s), y kind (0 step, 1 copy), z 1 = simulate (0 = dry glass),
                                 // w how far the field reaches (glass half sizes; the pane is -1..1)
     uniform float4 rpGlassB;    // x film a blade leaves, y 1 = rain lands (0 under a roof), z evaporation (1/s), w unused
+    uniform float4 rpGlassC;    // 1.6 glass fog: x how fogged the glass gets now (0..1.5), y how fast it fogs up (1/s),
+                                // z how fast it clears when the air dries (1/s), w how fast moving water washes it (1/s)
 
     // the windshield's own constants (glassConsts in Lua sets them by name, as for the windshield pass)
     uniform float4 rpWindA;     // xyz plane centre, w half width (m)

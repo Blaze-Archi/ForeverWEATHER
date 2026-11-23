@@ -18,7 +18,7 @@ const state = reactive({
   loaded: false,
   error: "",
   transport: "",
-  open: { ground: true, puddles: true, weather: false, rainfx: false, droplets: false, lens: false, windshield: false, spray: false, hydro: false, debug: false },
+  open: { ground: true, puddles: true, weather: false, rainfx: false, droplets: false, lens: false, windshield: false, fog: false, audio: false, spray: false, hydro: false, debug: false },
 })
 
 let users = 0
@@ -287,6 +287,28 @@ export function useRainPuddles() {
       return `active, speed ${((l.speed || 0) * 3.6).toFixed(0)} km/h, rain on lens ${(l.rain || 0).toFixed(2)}` + (l.sheltered ? ", sheltered" : "")
     },
     boxInfo: () => (Array.isArray(state.diag?.boxInfo) ? state.diag.boxInfo : []),
+    // 1.6 glass fog and body mist
+    fogText: () => {
+      const f = state.diag?.fog
+      if (!f) return "unknown"
+      return `Air ${Math.round((f.humid || 0) * 100)} % damp; windshield up to ${Math.round((f.front || 0) * 100)} % fogged` +
+        (f.blur ? " (blur running)" : " (blur idle: nothing fogged near you)") +
+        `; body mist ${Math.round((f.bodyMist || 0) * 100)} %`
+    },
+    // 1.6 rain sound
+    audioText: () => {
+      const a = state.diag?.audio
+      if (!a) return "unknown (sound module not loaded)"
+      if (a.failed) return `off: the game would not create a sound emitter (${a.note || "no reason given"})`
+      if (!a.playing) return "silent (no rain where you are)"
+      const l = a.layers || {}
+      const pct = (v) => Math.round((v || 0) * 100)
+      return `open sky around you ${pct(a.exposure)} %${a.inCar ? ", in the car" : ""}; ` +
+        `light ${pct(l.light)} / heavy ${pct(l.heavy)} / muffled ${pct(l.muffled)} / roof ${pct(l.roof)} %`
+    },
+    // 1.6 pre-release builds: untested, report bugs in the repository's issue tab
+    prerelease: () => !!state.diag?.prerelease,
+    issuesUrl: () => state.diag?.issues || "https://github.com/Blaze-Archi/ForeverWEATHER/issues",
     hydroText: () => {
       const h = state.diag?.hydro
       if (!h) return "Hydroplaning: unknown"

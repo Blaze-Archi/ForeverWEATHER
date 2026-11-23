@@ -19,6 +19,10 @@ cbuffer perDraw : register(b0)
     uniform float4 rpDropB;    // x shell thickness, y sheen, z max distance, w rain
     uniform float4 rpDropC;    // x gravity slide, y aero, z wind influence, w inertia strength
     uniform float4 rpDropD;    // x run-off amount, y trail amount, z Fresnel of the beads (1.1), w light catch (1.2.1)
+    uniform float4 rpDropE;    // 1.6 x the strongest body mist on any car (0 = none: the pass may skip without beads)
+    // 1.6 body mist per car: x how misted (0..1, with the amount), y engine heat on the hood (0..1)
+    uniform float4 rpVehI0; uniform float4 rpVehI1; uniform float4 rpVehI2;
+    uniform float4 rpVehI3; uniform float4 rpVehI4; uniform float4 rpVehI5;
 
     uniform float4 rpVehA0; uniform float4 rpVehB0; uniform float4 rpVehC0; uniform float4 rpVehD0;
     uniform float4 rpVehA1; uniform float4 rpVehB1; uniform float4 rpVehC1; uniform float4 rpVehD1;

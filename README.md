@@ -2,14 +2,16 @@
 
 # ForeverWEATHER: Rain Puddles & Droplets
 
-Falling rain, wet roads, puddles with reflections, node-based hydroplaning, body droplets, rain on the windshield, rear and side windows with real wipers, lens drops, dry tunnels and tyre spray.
+Falling rain, wet roads, puddles with reflections, node-based hydroplaning, body droplets, rain on the windshield, rear and side windows with real wipers, fogged glass, rain you can hear, lens drops, dry tunnels and tyre spray.
 
-A graphics and physics mod for **BeamNG.drive 0.40.x** (version 1.5.2 **Alpha**). Everything is drawn by the mod's own compute
-shaders and Lua; it needs no other mod.
+A graphics and physics mod for **BeamNG.drive 0.40.x** (version 1.6.0, **pre-release**). Everything is drawn by the mod's
+own compute shaders and Lua; it needs no other mod.
 
 > **DX12 and Vulkan only.** DX11 doesn't support SSR on BeamNG.drive currently, and the mod utilizes SSR for the puddles.
 > 
-> **Alpha release.** Expect rough edges; please report problems as issues.
+> **Pre-release: untested.** New builds are published as GitHub pre-releases, and 1.6.0 has not been tested in game
+> yet. Expect bugs, and please report them in the [Issues tab](https://github.com/Blaze-Archi/ForeverWEATHER/issues)
+> (there is a *Bug report* form).
 >
 > **Made with AI.** This mod was written by an AI assistant, Claude (by Anthropic) working in Claude Code: all of its
 > code, shaders, settings panel and texts, including this page. Blaze-Archi directed the work, tested it in game and
@@ -22,6 +24,9 @@ shaders and Lua; it needs no other mod.
 - Wet asphalt that darkens and turns glossy with the rain, plus puddles on roads with screen-space reflections, simulated ripples (every raindrop and tyre makes rings that spread, cross and fade) and tyre wakes. Water only stands on level ground: no puddles on hills.
 - Droplets on every nearby car: round beads, teardrops and elongated running drops that bead, run off with gravity and stream backward with the airflow. Each one is a small lens: clear water that shows an upside-down view of what is around it, and its rim catches bright light (the sky over a dark car, lit streets and lamps at night), so the drops show in the dark too.
 - Rain on your car's windshield, rear / hatch glass and side windows, from the driver's seat and from outside, cleared by automatic rain-sensing wipers. The drops on the glass are lenses like the ones on the paint. On the windshield and the rear glass the water is simulated: the wipers push it into lines at the ends of their sweep, whose big drops then run off with gravity and the airflow, and leave a hazy smear; the wiped glass fills up again with the rain while the water runs with speed and gravity.
+- Fogged glass: in damp air (drizzle, fog, the wet world after the rain) a fine mist settles on the outside of the windshield, rear and side windows. It blurs the view (lights get halos) and turns the windows milky from outside. The wipers wipe it off along their sweep and it comes back, faster when you drive; drops stay clear in it and running drops cut channels through it.
+- A hint of mist on the cars: a faint satin bloom of condensation on cars that stand in damp air, on the roof, the hood and the boot lid, not on a hood the engine has just warmed.
+- Rain you can hear: a patter or a downpour's roar through the game's sound engine. It turns muffled under a bridge or a roof, almost goes in a tunnel, and from the driver's seat the rain drums on the roof.
 - Drops on the camera lens all over the screen: round drops that land at random, spread out from the point ahead as you drive (the faster, the quicker) and slide down the lens when you slow down or stop.
 - Node-based hydroplaning (Arcade / Simcade / Sim): the water under each tyre's contact-patch nodes (the road film and exactly the puddles you see) lifts them off the road against the tyre's own pressure and drags them back, so grip fades in deep water at speed and one wheel in a puddle pulls the car.
 - Tunnels, bridges and roofs: the ground under them stays dry and does not reflect, no rain lands on the glass there, the wipers finish a couple of sweeps and stop, and the drops on the cars slowly go (faster the faster you drive).
@@ -85,11 +90,12 @@ and the street-lamp highlights that 1.4.0 removed.
 ## Install
 
 1. Close the game.
-2. Download `ForeverWEATHER.zip` from the [latest release](https://github.com/Blaze-Archi/ForeverWEATHER/releases/latest)
+2. Download `ForeverWEATHER.zip` from the newest build on the [Releases page](https://github.com/Blaze-Archi/ForeverWEATHER/releases)
    (or [`release/ForeverWEATHER.zip`](release/ForeverWEATHER.zip)) and put it, still zipped, into
    `<BeamNG user folder>/current/mods/`. Remove older `rainPuddles.zip` / `rain_puddles` zips and the old
    `rainPuddles_earth.zip` companion first: since 1.2.0 the zip is called ForeverWEATHER, and the BeamNG.Earth bridge has
-   been inside it since 1.0.2. Your settings stay.
+   been inside it since 1.0.2. Your settings stay. (New builds are pre-releases, which GitHub's "latest release" link
+   skips: take the newest one on the Releases page.)
 3. Start the game, load a map, press Esc and open **Mods > ForeverWEATHER**.
 
 Add or remove the zip only while the game is closed: the game's mod manager drops a zip that appears or disappears
@@ -99,6 +105,29 @@ The repository root has the same layout as the zip (`art/`, `lua/`, `mod_info/`,
 copy of it in `mods/unpacked/foreverweather/` also works for development. After editing a shader, rename its folder
 (`shaders/common/postFx/rainPuddlesNN`) and `shaderDir` in `lua/ge/extensions/rainPuddles.lua`, or the game keeps the
 compiled old one.
+
+## What's new in 1.6.0
+
+**Pre-release: untested in game.** Please report bugs in the [Issues tab](https://github.com/Blaze-Archi/ForeverWEATHER/issues).
+
+- **Glass fog.** A fine mist on the outside of the glass in damp air, drawn over a Dual Kawase blur of the view (five
+  small passes that only run while some glass near you is fogged). The wipers wipe it off along their real sweep, it
+  comes back gradually (faster at speed), the automatic wipers also wipe now and then in fog, drops stay clear in it and
+  running drops cut clear channels through it. From the seat the cabin is kept out of the blur, so the dashboard never
+  smears into the view. *Glass fog & body mist*.
+- **Body mist.** A subtle condensation bloom on cars that stand in damp air: most on the roof, the hood and the boot
+  lid, not on a warm hood, kept off by driving. It softens the clear coat's reflection and is easiest to see on dark
+  paint.
+- **Rain sound.** Synthesised rain loops through the game's FMOD: a patter or a roar with the rain, muffled and fading
+  under bridges, roofs and in tunnels (from the shelter grid the mod already keeps, no extra ray casts), the body
+  muffling it and the rain drumming on the roof from the driver's seat. *Rain sound*.
+- **Calmer puddles.** The rain's rings in the puddles are half as strong; the tyres' wakes keep their full strength.
+- **Simulated mist fixed** after vehicle resets and teleports (the tyres are held for a moment and the air restarts
+  from calm) and around cars that stand still (a wheelspin no longer piles mist up, a parked car's wake comes to rest,
+  no runaway swirls in still air).
+- **Pre-release builds** from a GitHub workflow, with an untested notice in the release notes and in the zip.
+
+Full notes: [docs/history/CHANGES_v1.6.0.md](docs/history/CHANGES_v1.6.0.md).
 
 ## What's new in 1.5.2
 
@@ -244,6 +273,11 @@ Full notes: [docs/history/CHANGES_v1.2.0.md](docs/history/CHANGES_v1.2.0.md).
 - The simulated ripples are off while the 'Surroundings' reflection fallback is in use (they share a texture slot of the puddle pass); the drawn ripples show then.
 - The glass water covers the windshield and the rear glass; the side windows keep the earlier model. A rear wiper was not tested on a car that has one (it uses the front wipers' code).
 - The mist is simulated within about 40 m around the camera (a little ahead of it); spray farther away is the drawn plume only.
+- 1.6.0 is a pre-release and has not been tested in game: the glass fog, the body mist, the rain sound and the mist fixes were only checked outside the game (see its change log).
+- Only the outside of the glass fogs. Mist inside a cabin (breath, wet clothes), which no wiper reaches, is not drawn.
+- The glass fog's blur levels are sized relative to the frame (the post effects' `targetScale`). Should a build of the game ignore that, the levels come out full size: the same look, at a higher cost.
+- The rain sound is ambient (2D): it is not placed where the rain falls, and it follows the camera's shelter, not every surface around it. Under a very wide roof that ends just beyond the 26 m grid the open rain can be quieter than it should be.
+- The body mist is drawn on the 6 nearest cars only (the cars with body drops).
 
 ## BeamNG.Earth
 
@@ -260,14 +294,27 @@ the ground gets wet and dries, the puddles and the spray. On every other map it 
 | `lua/ge/extensions/rainPuddlesWet.lua` | optional native wet-road film (road material roughness; only in *Native PBR + SSR* mode) |
 | `lua/ge/extensions/rainPuddlesHydro.lua` | hydroplaning, game-engine side: puddle field, lanes, roofs and slopes for each car |
 | `lua/ge/extensions/rainPuddlesEarth.lua` | bridge to BeamNG.Earth's real weather (only active on that map) |
+| `lua/ge/extensions/rainPuddlesAudio.lua` | rain sound: FMOD loops mixed by the rain and the shelter around the listener |
 | `lua/vehicle/extensions/rainPuddlesHydroVeh.lua` | hydroplaning, vehicle side: contact-patch nodes, water depth, lift and drag at the physics rate |
 | `lua/vehicle/extensions/` (other files) | wheel / windshield probe, the optional Animated Wipers bridge |
-| `shaders/common/postFx/rainPuddles71/` | compute shaders: puddles + wet ground, simulated ripples, body droplets, glass + glass water, falling rain, spray + simulated mist, lens |
+| `shaders/common/postFx/rainPuddles72/` | compute shaders: puddles + wet ground, simulated ripples, body droplets + body mist, glass + glass water + glass fog, Dual Kawase blur, falling rain, spray + simulated mist, lens |
 | `ui/ui-vue/mods/RainPuddles/` | settings panel (Pause menu > Mods > ForeverWEATHER) |
 | `art/rainPuddles/` | puddle masks (and their raw fields for the physics), droplet atlas, wiper sweep texture |
+| `art/sound/rainPuddles/` | the rain loops (synthesised by `tools/gen_rain_audio.py`) |
 | `mod_info/FOREVERWEATHER/` | icon and description for the game's mod manager |
 | `release/` | the ready-to-install zip |
+| `tools/` | not in the zip: `build_release.py` (the zip, version check, pre-release notice), `release_notes.py`, `gen_rain_audio.py`, `ci/check_shaders.sh` |
+| `.github/` | the release workflow (tags `v*` are published as pre-releases) and the bug report form |
 | `docs/` | banner, screenshots, Linux / Vulkan notes, change logs |
+
+## Releases
+
+Pushing a tag like `v1.6.0` runs `.github/workflows/release.yml`: it checks that the tag matches the version in
+`mod_info`, the Lua and the UI, compiles every Lua file with LuaJIT and every shader with glslang, builds
+`ForeverWEATHER.zip` with `tools/build_release.py` and publishes it as a **GitHub pre-release**. The release notes open
+with a notice that the build is untested and that bugs go to the Issues tab, and the zip carries the same notice
+(`PRERELEASE_README.txt`). A final release is only made by running the workflow by hand with *prerelease* unticked.
+Locally: `python3 tools/build_release.py` builds the same zip into `release/`.
 
 ## Animated Wipers
 

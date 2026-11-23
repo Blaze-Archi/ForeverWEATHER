@@ -1,0 +1,81 @@
+name: Bug report
+description: Something in ForeverWEATHER looks or behaves wrong (pre-release builds are untested, so this helps a lot)
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing! Pre-release builds have not been tested in game, so every report counts.
+        A screenshot or a short clip says more than words. The more of the fields below you fill in, the quicker it can be fixed.
+  - type: input
+    id: version
+    attributes:
+      label: ForeverWEATHER version
+      description: Pause menu > Mods > ForeverWEATHER shows it at the top (e.g. 1.6.0)
+      placeholder: 1.6.0
+    validations:
+      required: true
+  - type: input
+    id: game
+    attributes:
+      label: BeamNG.drive version
+      placeholder: 0.40.x
+    validations:
+      required: true
+  - type: dropdown
+    id: api
+    attributes:
+      label: Graphics API
+      options:
+        - DX12
+        - Vulkan
+        - DX11 (not supported, but tell us anyway)
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: Graphics card, upscaler (DLSS / FSR / XeSS / none)
+  - type: dropdown
+    id: area
+    attributes:
+      label: What it is about
+      multiple: true
+      options:
+        - Glass fog / blur on the windows
+        - Wipers / drops on the glass
+        - Body mist / drops on the cars
+        - Rain sound / shelter (tunnels, bridges)
+        - Puddles / ripples / wet road
+        - Tyre spray / simulated mist
+        - Lens drops
+        - Falling rain
+        - Hydroplaning
+        - Settings panel
+        - Performance
+        - Other
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to see it
+      description: Map, car, camera (driver's seat, chase, free), weather / rain amount, time of day, what you did (e.g. reset the car, drove into a tunnel)
+      placeholder: |
+        1. East Coast USA, ETK 800, driver's seat, rain 0.6, night
+        2. Reset the car while driving
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log lines
+      description: |
+        Lines of beamng.log that mention rainPuddles. In the console: extensions.rainPuddles.scanLog() writes them to rainPuddles_logscan.txt in your BeamNG user folder.
+      render: text

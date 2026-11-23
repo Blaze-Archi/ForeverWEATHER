@@ -501,6 +501,17 @@ local function weatherValues(p, x, rain)
   return v
 end
 
+-- 1.6 how damp the air is (0..1) for ForeverWEATHER's glass fog and body mist: fog, poor visibility, drizzle; a little
+-- more in the cold (the glass and the bodywork cool below the dew point sooner)
+local function humidityFor(x)
+  local h = 0
+  if (x.fog or 0) > 0 then h = math.max(h, 0.85 * clamp(x.fog, 0, 1)) end
+  if (x.vis or 20000) < 5000 then h = math.max(h, 0.8 * clamp((5000 - x.vis) / 4000, 0, 1)) end
+  if isDrizzle(x.code or 0) then h = math.max(h, 0.7) end
+  if (x.temp or 12) < 8 then h = h * 1.15 end
+  return clamp(h, 0, 1)
+end
+
 -- Snow: no rain to draw; above freezing the road is slushy-wet under it (a wet floor, no falling rain)
 local function wetFloorFor(x)
   if x.snow > 0.05 and x.temp > -1.0 then return clamp(0.35 + 0.25 * clamp(x.snow, 0, 2), 0, 0.85) end
@@ -621,6 +632,7 @@ local function tick(dt)
       local vals = weatherValues(p, x, rainDraw)
       vals.rain = rainDraw
       opts.wetFloor = wetFloorFor(x)
+      opts.humidity = humidityFor(x)                             -- 1.6 glass fog / body mist
       send(m, vals, opts, true)
       if type(m.snapWetness) == 'function' then pcall(m.snapWetness) end
       log('I', TAG, string.format('arrived in rain (%.2f mm/h): ground wetted', tonumber(msg.rainMmH) or 0))
@@ -629,6 +641,7 @@ local function tick(dt)
 
   local vals = weatherValues(p, x, rainDraw)
   opts.wetFloor = wetFloorFor(x)
+  opts.humidity = humidityFor(x)                                 -- 1.6 glass fog / body mist
   send(m, vals, opts, false)
 
   -- the player moved the rain slider: it follows the real rain here; say why once a map

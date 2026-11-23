@@ -5,6 +5,10 @@
       <span class="rp-muted">Rain Puddles &amp; Droplets v{{ VERSION }}</span>
     </div>
 
+    <div v-if="rp.prerelease()" class="rp-note rp-warn">
+      <b>Pre-release, untested.</b> This build has not been tested in game yet. Please report bugs in the Issues tab:
+      <span class="rp-mono">{{ rp.issuesUrl() }}</span>
+    </div>
     <div v-if="state.error" class="rp-note rp-warn">{{ state.error }}</div>
     <div v-if="state.diag && state.diag.external && (state.diag.external.keys || []).length" class="rp-note">
       Weather: <b>{{ state.diag.external.label }}</b> sets {{ (state.diag.external.keys || []).length }} settings right now
@@ -175,6 +179,36 @@
       <div class="rp-note rp-muted">Glass: {{ rp.windshieldText() }}</div>
       <BngButton @click="rp.rescanWindshield()">Re-scan windshield</BngButton>
       <BngButton @click="rp.sweep()">Single wiper sweep</BngButton>
+    </RpSection>
+
+    <!-- ================= 1.6 GLASS FOG & BODY MIST ================= -->
+    <RpSection title="Glass fog & body mist" :open="state.open.fog" @toggle="rp.toggle('fog')">
+      <BngSwitch :model-value="state.s.glassFog !== false" @update:model-value="rp.set('glassFog', $event)">
+        Glass fogging (a fine mist on the outside of the glass in damp air; the wipers clear it and it comes back)
+      </BngSwitch>
+      <BngSwitch :model-value="state.s.bodyMist !== false" @update:model-value="rp.set('bodyMist', $event)">
+        Body mist (a faint condensation bloom on cars that stand in damp air)
+      </BngSwitch>
+      <RpSlider v-for="x in SLIDERS.fog" :key="x.k" v-bind="sliderProps(x)" @change="rp.set(x.k, $event)" />
+      <div class="rp-muted">How damp the air is comes from the rain (drizzle and light rain mist the glass most), the
+        map's own fog, the wet ground after the rain and the time of day (BeamNG.Earth: its real fog and visibility).
+        Fogged glass blurs the view through it, lights get halos, and from outside the window turns milky. The drops on
+        the glass stay clear in it, and the paths running drops take are clear of it. The automatic wipers also wipe now
+        and then in fog. The mist inside a cabin (breath, wet clothes) is not drawn: no wiper could reach it.</div>
+      <div class="rp-note rp-muted">{{ rp.fogText() }}</div>
+    </RpSection>
+
+    <!-- ================= 1.6 RAIN SOUND ================= -->
+    <RpSection title="Rain sound" :open="state.open.audio" @toggle="rp.toggle('audio')">
+      <BngSwitch :model-value="state.s.rainAudio !== false" @update:model-value="rp.set('rainAudio', $event)">
+        Rain sound
+      </BngSwitch>
+      <RpSlider v-for="x in SLIDERS.audio" :key="x.k" v-bind="sliderProps(x)" @change="rp.set(x.k, $event)" />
+      <div class="rp-muted">Light patter or a downpour's roar with the rain. Under a bridge, at a tunnel portal or under a
+        roof it turns muffled and fades with the open sky around you; deep in a tunnel it is almost gone. From the
+        driver's seat the car's body muffles it and the rain drums on the roof (not under a roof). Played through the
+        game's own sound engine; the game's volume settings apply.</div>
+      <div class="rp-note rp-muted">Sound: {{ rp.audioText() }}</div>
     </RpSection>
 
     <RpSection title="Tyre spray & wakes" :open="state.open.spray" @toggle="rp.toggle('spray')">

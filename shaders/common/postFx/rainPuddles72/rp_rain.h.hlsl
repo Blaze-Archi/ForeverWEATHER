@@ -14,7 +14,7 @@ cbuffer perDraw : register(b0)
     uniform float4 rpCam;      // xyz camera, w time (s)
     uniform float4 rpMode;     // x debug, y depth mode, z depth scale, w brightness
     uniform float4 rpRainA;    // x visibility, y chance of a drop per cell (0 = no rain), z drop diameter (m), w distance (m)
-    uniform float4 rpRainB;    // xyz streak from a drop's head to its tail (m, world axes), w brightness
+    uniform float4 rpRainB;    // xyz streak from a drop's head to its tail (m, world axes), w how much shows (1.6)
     uniform float4 rpRainC;    // xyz camera in the falling frame of the near grid (wrapped), w near cell size (m)
     uniform float4 rpRainD;    // xyz camera in the falling frame of the far grid (wrapped), w far cell size (m)
     uniform float4 rpRainF;    // player car box: xyz centre, w 1 = valid

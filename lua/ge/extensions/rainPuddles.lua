@@ -26,7 +26,7 @@ local TAG = 'rainPuddles'
 -- shader file changed (measured: edited shaders kept running in their old form across restarts until that cache was
 -- cleared). A new path makes every player's game compile the 1.0 shaders instead of reusing cached 0.9 ones.
 -- Rename the folder again whenever the shaders change in a release.
-local shaderDir = 'shaders/common/postFx/rainPuddles71/'
+local shaderDir = 'shaders/common/postFx/rainPuddles72/'
 local maskDir = '/art/rainPuddles/'
 local wiperMaskPath = maskDir .. 'wiper_sweep.data.png'
 local settingsFile = '/settings/rainPuddles.json'
@@ -55,13 +55,10 @@ local FX_RAIN  = 'RainPuddles_Rain'           -- 1.0: the mod's own falling rain
 -- 1.2: a new file name on purpose (the atlas grew to 4 x 8 tiles: elongated teardrops in row 4), so no cached
 -- conversion of the old 4 x 4 atlas is used
 local dropAtlasPath = maskDir .. 'droplet_atlas2.data.png'
-local PROBES = {}   -- bisect probes removed in 0.4.6 (they found the Vulkan compile bug)
 
-local PRECIP_HEAVY = 'RainPuddles_NativeRain'
-local PRECIP_FINE  = 'RainPuddles_NativeSpray'
 
 local defaults = {
-  settingsVersion = 29,
+  settingsVersion = 30,
   enabled = true,
   wetGround = true,          -- 0.7: global wet ground on/off, independent of the puddles
   puddles = true,
@@ -168,6 +165,14 @@ local defaults = {
   wiperSpeed = 1.20,
   wiperTrail = 0.55,
   glassSim = true,           -- 1.5: the water on the windshield is simulated (rp_glass.cs.hlsl): wipers push it aside
+  -- 1.6 glass fog: a fine mist on the outside of the glass (drizzle and fog drops, condensation) that the wipers clear and
+  -- that comes back, drawn over a Dual Kawase blur of the view (see FOG)
+  glassFog = true,
+  glassFogAmount = 0.60,     -- how fogged the glass gets in damp air (0 = never)
+  glassFogBlur = 1.25,       -- how soft the view through fogged glass gets (the blur's tap offset, in texels per level)
+  -- 1.6 body mist: a faint satin bloom of condensation on cars that stand in damp air (roof, hood, boot lid)
+  bodyMist = true,
+  bodyMistAmount = 0.35,
 
   -- Camera lens droplets (0.6)
   lensIntensity = 1.00,      -- opacity / strength of the lens droplets
@@ -188,6 +193,10 @@ local defaults = {
   mistAmount = 1.00,         -- 1.5: how much of it hangs in the air
   tyreWakes = 1.00,          -- 0.9: waves and churned water behind tyres rolling through puddles
   trafficSpray = true,       -- 0.9: spray and wakes from other vehicles too (up to 8 tyres in total)
+
+  -- 1.6 rain sound (rainPuddlesAudio): FMOD loops mixed by the rain and by the shelter around the listener
+  rainAudio = true,
+  rainAudioVolume = 0.80,
 
   -- 1.0 hydroplaning (node-based, in each car's own Lua: lua/vehicle/extensions/rainPuddlesHydroVeh.lua)
   hydroplaning = 2,          -- 0 off, 1 arcade, 2 simcade, 3 sim
@@ -279,6 +288,10 @@ local ranges = {
   boxLag = { 0, 3 },
   wiperSpeed = { 0.1, 3.0 },
   wiperTrail = { 0, 1 },
+  glassFogAmount = { 0, 1.5 },
+  glassFogBlur = { 0.5, 3 },
+  bodyMistAmount = { 0, 1 },
+  rainAudioVolume = { 0, 1.5 },
 
   lensIntensity = { 0, 2 },
   lensDensity = { 0, 1 },
@@ -303,7 +316,7 @@ local ranges = {
   maskB = { 1, 12 },
   depthMode = { 0, 2 },
   depthScale = { 0.01, 100 },
-  debugMode = { 0, 23 },
+  debugMode = { 0, 24 },
   debugBrightness = { 0.05, 50 },
 }
 
@@ -326,9 +339,15 @@ local cam = {
 }
 local boxes = {}
 local accelState = {}   -- [vehicle id] = last velocity + low-passed acceleration
+-- 1.6 vehicle resets and teleports: a car that jumped (the game's reset hook, or a position change no car can drive in a
+-- frame) has its tyres held out of the spray, the wakes and the simulated mist for a moment (JUMP.hold s, then they fade
+-- back in), because its speed readings around the jump are meaningless. vids: jumped this frame, handled in onPreRender
+-- (JUMP.handle, below everything it resets); tyreHold: [vid] = held until (real time).
+-- (one table on purpose: the main chunk is at LuaJIT's limit of 200 local variables; JUMP.handle is defined with the hooks)
+local JUMP = { vids = {}, tyreHold = {}, hold = 0.6 }
 local frameDtSim = 0
 local frameId, camFrame = 0, -1
-local VERSION = '1.5.2'
+local VERSION = '1.6.0'
 local MAX_VEH_PUDDLES = 12   -- vehicles kept off the puddle / wet-ground pass (must match rp_puddles.h.hlsl)
 local MAX_VEH_DROPS = 6      -- vehicles with body droplets (must match rp_droplets.h.hlsl)
 local PROFILE_N = 16         -- roof-line samples per vehicle (must match rp_droplets.cs.hlsl)
@@ -369,7 +388,9 @@ local rainSt = { on = false, fx = 0, fy = 0, fz = 0, vx = 0, vy = 0, vz = 0, px 
                  dryNear = false, dryNearUntil = -1e9, camCovered = false, vehWet = {}, wetPruneAt = 0,
                  farCov = 0, camFloor = -1e5, shF = nil, shT = nil,
                  player = { on = false, pend = nil, startTS = nil, endTS = nil, sweeps = 0, wetHold = 0, cov = 0 } }
-local precip = { existing = nil, existingName = nil, orig = nil, heavy = nil, fine = nil, count = 0, drops = 0 }
+-- (1.6: the managed objects' names live here: the main chunk is at LuaJIT's limit of 200 local variables)
+local precip = { existing = nil, existingName = nil, orig = nil, heavy = nil, fine = nil, count = 0, drops = 0,
+                 HEAVY = 'RainPuddles_NativeRain', FINE = 'RainPuddles_NativeSpray' }
 local warned = {}
 
 local function warnOnce(key, msg)
@@ -686,7 +707,8 @@ end
 -- Another mod that owns the weather (the BeamNG.Earth bridge: the real weather) can drive any of the settings for a
 -- while (M.setExternalWeather). Its values are what the mod uses; the player's own values stay what is saved and what
 -- comes back when it stops (M.clearExternalWeather) or the game closes, and a slider moved meanwhile is kept for then.
--- flags: wetFloor (the least ground wetness without falling rain, e.g. slush under snow above freezing).
+-- flags: wetFloor (the least ground wetness without falling rain, e.g. slush under snow above freezing), humidity (1.6:
+-- how damp the air is, 0..1: the glass fog and the body mist take the larger of it and the mod's own estimate).
 local EXT = { src = nil, label = nil, base = {}, vals = {}, flags = {}, pushAt = -1e9 }
 
 local function saveSettings()
@@ -934,6 +956,17 @@ local function updateAccel(list, dt)
       st = { vx = b.vx, vy = b.vy, vz = b.vz, ax = 0, ay = 0, az = 0 }
       accelState[b.id] = st
     end
+    -- 1.6 teleport: the box moved further in one frame than the car could drive (twice its speed over the frame, plus a
+    -- margin for the physics settling after a spawn). Also while paused (a car moved by the editor or a reset).
+    if st.px then
+      local jx, jy, jz = b.cx - st.px, b.cy - st.py, b.cz - st.pz
+      local reach = math.max(b.speed or 0, st.spd or 0) * math.max(dt, 1 / 30) * 2.0 + 1.5
+      if jx * jx + jy * jy + jz * jz > math.max(reach, 3.0) ^ 2 then
+        JUMP.vids[b.id] = true
+        st.vx, st.vy, st.vz, st.ax, st.ay, st.az = b.vx, b.vy, b.vz, 0, 0, 0
+      end
+    end
+    st.px, st.py, st.pz, st.spd = b.cx, b.cy, b.cz, b.speed
     if dt > 1e-4 then
       local rx, ry, rz = (b.vx - st.vx) / dt, (b.vy - st.vy) / dt, (b.vz - st.vz) / dt
       if rx * rx + ry * ry + rz * rz > 80 * 80 then rx, ry, rz = 0, 0, 0 end
@@ -2199,12 +2232,16 @@ end
 local function addTyresOf(b, list)
   local veh = b.veh
   local speed = b.speed or 0
+  -- 1.6: a speed no car reaches (a physics glitch around a spawn or reset) is no motion; and a car whose tyres are held
+  -- after a reset or teleport (JUMP.tyreHold) moves nothing for the spray, the wakes and the mist
+  local held = (JUMP.tyreHold[b.id] or -1e9) > T
+  if speed ~= speed or speed > 150 or held then speed = 0 end
   -- travel direction: velocity, or the heading when nearly stopped (wheelspin still throws water backward)
   local fx, fy = vecCall(veh, 'getDirectionVector')
   if not fx then fx, fy = -b.a1[1], -b.a1[2] end
   local dx, dy = fx, fy
   local hl = math.sqrt(dx * dx + dy * dy)
-  if hl > 1e-4 then dx, dy = dx / hl, dy / hl end
+  if hl > 1e-4 then dx, dy = dx / hl, dy / hl else dx, dy = 0, 1 end   -- 1.6: never a zero direction (car on its side)
   local vl = math.sqrt(b.vx * b.vx + b.vy * b.vy)
   if speed > 0.8 and vl > 1e-3 then dx, dy = b.vx / vl, b.vy / vl end
   local ux, uy, uz = b.a2[1], b.a2[2], b.a2[3]
@@ -2231,7 +2268,7 @@ local function addTyresOf(b, list)
         -- made it throw spray and mist standing still); a real wheelspin is at most a few tens of m/s above the ground
         -- speed
         local ts = spin and tonumber(spin[i])
-        if not ts or ts ~= ts or ts < 0 or ts > speed + 60 or ts > 150 then ts = speed end
+        if not ts or ts ~= ts or ts < 0 or ts > speed + 60 or ts > 150 or held then ts = speed end
         list[#list + 1] = { x = wx, y = wy, z = gz, hw = hw, r = clamp(wz - gz, 0.18, 0.8), dx = dx, dy = dy,
                             g = speed, s = ts, key = b.id .. ':' .. i,
                             seed = (b.seed + i * 0.137) % 1, vid = b.id }
@@ -2283,6 +2320,9 @@ local function collectTyres(dt)
     local wetT = 1 - rainSt.coveredAt(t.x, t.y, t.z)
     f.wet = f.wet + (wetT - f.wet) * (1 - math.exp(-dt / ((wetT > f.wet) and 0.45 or 0.7)))
     f.on = math.min(1, f.on + dt / 0.6)
+    -- 1.6: held after a reset / teleport: off now, and from nothing again once the hold ends (no smoothed spin carried
+    -- across the jump)
+    if (JUMP.tyreHold[t.vid] or -1e9) > T then f.on, f.s = 0, 0 end
     f.s = f.s + (t.s - f.s) * (1 - math.exp(-dt / 0.15))
     t.s = f.s
     local far = 1
@@ -2361,7 +2401,7 @@ local function findExistingPrecip()
   if not ok or type(list) ~= 'table' then return nil, nil end
   local best, bestName, bestD2 = nil, nil, math.huge
   for _, n in ipairs(list) do
-    if n ~= PRECIP_HEAVY and n ~= PRECIP_FINE then
+    if n ~= precip.HEAVY and n ~= precip.FINE then
       local o = scenetree.findObject(n)
       if o then
         local pos = nil
@@ -2430,8 +2470,8 @@ local function createManagedPrecip(name, dataBlock)
 end
 
 local function clearManagedPrecip()
-  deleteObject(PRECIP_HEAVY)
-  deleteObject(PRECIP_FINE)
+  deleteObject(precip.HEAVY)
+  deleteObject(precip.FINE)
   precip.heavy, precip.fine = nil, nil
 end
 
@@ -2453,7 +2493,7 @@ local function readGameRain()
   if not ok or type(list) ~= 'table' then return nil end
   local drops, n = 0, 0
   for _, name in ipairs(list) do
-    if name ~= PRECIP_HEAVY and name ~= PRECIP_FINE then
+    if name ~= precip.HEAVY and name ~= precip.FINE then
       local o = scenetree.findObject(name)
       if o then
         local d = nil
@@ -2472,8 +2512,8 @@ local function updatePrecipitation()
   if precip.existingName and not scenetree.findObject(precip.existingName) then
     precip.existing, precip.existingName, precip.orig = nil, nil, nil
   end
-  if precip.heavy and not scenetree.findObject(PRECIP_HEAVY) then precip.heavy = nil end
-  if precip.fine and not scenetree.findObject(PRECIP_FINE) then precip.fine = nil end
+  if precip.heavy and not scenetree.findObject(precip.HEAVY) then precip.heavy = nil end
+  if precip.fine and not scenetree.findObject(precip.FINE) then precip.fine = nil end
 
   local levelName = nil
   if type(getCurrentLevelIdentifier) == 'function' then
@@ -2516,9 +2556,9 @@ local function updatePrecipitation()
 
   precip.existing = nil
   local useFine = S.rain >= 0.52
-  if not precip.heavy then precip.heavy = createManagedPrecip(PRECIP_HEAVY, 'rain_medium') end
-  if useFine and not precip.fine then precip.fine = createManagedPrecip(PRECIP_FINE, 'rain_drop') end
-  if not useFine and precip.fine then deleteObject(PRECIP_FINE); precip.fine = nil end
+  if not precip.heavy then precip.heavy = createManagedPrecip(precip.HEAVY, 'rain_medium') end
+  if useFine and not precip.fine then precip.fine = createManagedPrecip(precip.FINE, 'rain_drop') end
+  if not useFine and precip.fine then deleteObject(precip.FINE); precip.fine = nil end
 
   local heavyN = round(S.precipMaxDrops * 0.68 * (S.rain ^ 1.15))
   local fineN = 0
@@ -2955,6 +2995,27 @@ function rainSt.coveredAt(x, y, z)
   return farK + (grid - farK) * nearK
 end
 
+-- 1.6 rain sound: how much open sky around the listener (the camera) the rain is heard from, 0..1. Every cell of the
+-- shelter grid counts by 1 / (1 + d^2 / 36) (the rain within a few metres is the loudest; cells further out still add,
+-- so under a bridge the rain beside it is heard), a roof over a cell closes it, and deep in a tunnel (farCov: the
+-- tunnel goes on beyond the grid) the open sky is far away. No new casts: it reads the grid the rain and the ground use
+-- (a few casts per frame, each cell kept for up to 30 s). Returns the exposure and whether the grid was ready.
+function rainSt.exposure()
+  local sh, n = rainSt.shelter, RAIN.n
+  if #sh ~= n * n then return 1, false end
+  local hn, sp = (n - 1) / 2, RAIN.spacing
+  local wSum, wOpen = 0, 0
+  for j = -hn, hn do
+    for i = -hn, hn do
+      local dx, dy = rainSt.sox + i * sp - cam.x, rainSt.soy + j * sp - cam.y
+      local w = 1 / (1 + (dx * dx + dy * dy) / 36)
+      wSum = wSum + w
+      if (sh[(j + hn) * n + (i + hn) + 1] or -1e5) < -1e4 then wOpen = wOpen + w end
+    end
+  end
+  return clamp((wOpen / math.max(wSum, 1e-6)) * (1 - 0.8 * (rainSt.farCov or 0)), 0, 1), true
+end
+
 -- 1.0.1: true while a level is running and shown (not the main menu or a loading screen): nothing is drawn before
 function rainSt.live()
   local wr = rawget(_G, 'worldReadyState')
@@ -3196,7 +3257,11 @@ end
 -- A <- (C, B), B <- (A, C), C <- (B, A). The water never leaves the graphics card.
 local WAVE = { fxA = 'RainPuddles_WaveA', fxB = 'RainPuddles_WaveB', fxC = 'RainPuddles_WaveC', shader = 'RainPuddles_WaveShaderData',
                N = 512, dx = 16 / 512, ocx = nil, ocy = nil, lox = nil, loy = nil, sx = 0, sy = 0, dt = 0, fdt = 0,
-               fresh = 0, bound = false }   -- bound: the puddle pass reads the water (its slot 5, see createObjects)
+               fresh = 0, bound = false,    -- bound: the puddle pass reads the water (its slot 5, see createObjects)
+               -- 1.6 (the user's request: calmer, more readable puddles): the rings the RAIN makes are half as strong, in
+               -- the simulation (the drops' impact depth) and in the drawn rings further away. The tyres' wakes, bow
+               -- waves and spin rings keep their full strength, so a car rolling through still stands out clearly.
+               rainK = 0.5 }
 
 function WAVE.wanted()
   return (S.enabled and S.puddles and S.rippleSim ~= false and WAVE.bound and rainSt.live()) and true or false
@@ -3238,8 +3303,9 @@ function WAVE.consts(fx, idx)
   fx:setShaderConst('$rpWaveB', fmt4(cx, cy, px, py))
   fx:setShaderConst('$rpWaveC', fmt4(WAVE.ocx or 0, WAVE.ocy or 0, (frameId * 3 + idx - 1) % 16777216,
     (WAVE.wanted() and WAVE.ocx ~= nil and WAVE.fresh <= 0) and 1 or 0))   -- the first frames: still water
-  -- x tyre push, y frame time, z viscosity (m^2/s), w impact depth of a drop (m)
-  fx:setShaderConst('$rpWaveD', fmt4(0.004 * clamp(S.tyreWakes or 1, 0, 2), WAVE.fdt, 0.0006, 0.004))
+  -- x tyre push, y frame time, z viscosity (m^2/s), w impact depth of a drop (m). The water is linear, so the drop depth
+  -- alone sets how strong the rain's rings are (1.6: x WAVE.rainK); the tyres' push stays as it was.
+  fx:setShaderConst('$rpWaveD', fmt4(0.004 * clamp(S.tyreWakes or 1, 0, 2), WAVE.fdt, 0.0006, 0.004 * WAVE.rainK))
   fx:setShaderConst('$rpWaveE', fmt4(drops, 0, 0, 0))
   setTyreConsts(fx)
 end
@@ -3254,7 +3320,11 @@ end
 -- frame's grid). The layers lie on a plane fitted to the road around the grid's centre (three rays down, smoothed).
 WAVE.ms = { N = 128, dx = 40 / 128, jacobi = 14, shader = 'RainPuddles_MistShaderData', bound = false,
             ocx = nil, ocy = nil, lox = nil, loy = nil, sx = 0, sy = 0, fdt = 0, fresh = 0,
-            zc = nil, xc = 0, yc = 0, gx = 0, gy = 0 }
+            zc = nil, xc = 0, yc = 0, gx = 0, gy = 0,
+            -- 1.6 stability (rpMistG): the warm start of the pressure solve, the fastest tyre the forcing believes (m/s),
+            -- the fallout of dense mist (1/s per unit of density), the air speed (m/s) below which vorticity confinement
+            -- fades out; px/py: the camera last frame (a jump re-fits the road plane at once)
+            warm = 0.85, vCap = 90, fallout = 0.6, calm = 1.2, px = nil, py = nil }
 function WAVE.mistName(k) return 'RainPuddles_Mist' .. k end
 function WAVE.mistPasses() return WAVE.ms.jacobi + 3 end            -- advection, divergence, pressure .., projection
 
@@ -3296,9 +3366,20 @@ function WAVE.mistUpdate(dt)
   local m = WAVE.ms
   if not WAVE.mistWanted() then
     m.ocx, m.ocy, m.lox, m.loy, m.sx, m.sy = nil, nil, nil, nil, 0, 0
+    m.px, m.py = nil, nil
     return
   end
-  if m.ocx == nil then m.fresh = 3 elseif m.fresh > 0 then m.fresh = m.fresh - 1 end
+  -- (1.6: a reset or teleport of the player's car sets fresh = 3 at once, JUMP.handle: the air starts again from calm, the
+  -- same clean start as a new level. Up to 1.5.2 the air kept the wake of a car that was no longer there, the warm-started
+  -- pressure kept pushing it, and the first frames' speed readings drove it into the range limit.)
+  if m.ocx == nil then
+    m.fresh = 3
+  elseif m.fresh > 0 then
+    m.fresh = m.fresh - 1
+  end
+  -- a camera jump (switching cars, a far camera cut): the road plane is fitted again at once, not eased over there
+  if m.px and ((cam.x - m.px) ^ 2 + (cam.y - m.py) ^ 2) > 144 then m.zc = nil end
+  m.px, m.py = cam.x, cam.y
   local N, dx = m.N, m.dx
   local cx, cy = cam.x + (cam.fx or 0) * 10, cam.y + (cam.fy or 0) * 10
   local ocx, ocy = math.floor(cx / dx) - N / 2, math.floor(cy / dx) - N / 2
@@ -3331,6 +3412,11 @@ function WAVE.mistConsts(fx, k)
   -- x turbulent spreading of the mist (m^2/s), y spray thrown per second at full strength
   -- z share of a car's speed the air around it takes, w strength of the pressure step
   fx:setShaderConst('$rpMistF', fmt4(0.04, 6, 0.6, 0.8))
+  -- 1.6 stability: x the warm start's share (only the first pressure iteration, k == 3, reads the last frame), y the
+  -- fastest tyre, z fallout of dense mist, w air speed below which the confinement fades out
+  fx:setShaderConst('$rpMistG', fmt4((k == 3) and m.warm or 1.0, m.vCap, m.fallout, m.calm))
+  -- 1.6 x: the frame, seeding the stochastic rounding of the stored air speed (no dead band that freezes a parked wake)
+  fx:setShaderConst('$rpMistH', fmt4(frameId % 16777216, 0, 0, 0))
   if k == 1 then setTyreConsts(fx) end                           -- (only the advection pass reads the tyres)
 end
 
@@ -3347,6 +3433,184 @@ function WAVE.mistSplash(fx)
   fx:setShaderConst('$rpMistQ', fmt4(m.gx, m.gy, 0.55 * clamp(tonumber(S.mistAmount) or 1, 0, 2), cam.cockpit and 1.6 or 1.5))
 end
 
+-- 1.6 glass fog and body mist --------------------------------------------------------------------------------------------
+-- How damp the air is (FOG.humid, 0..1): the level's own fog, drizzle and light rain (they mist the glass most; a downpour
+-- beads and sheets it instead), the wet world after the rain, an external weather's humidity (setExternalWeather's
+-- opts.humidity: BeamNG.Earth's fog and visibility), a little more at night when the air cools. From it:
+--  * glass fog: a fine mist on the OUTSIDE of the glass - drizzle and fog drops too small to bead, condensation on glass
+--    the airflow cools - that the wipers clear and that comes back. On the windshield and the rear glass it lives in the
+--    simulated glass water (rp_glass.cs.hlsl, z: running water cuts channels through it, it grows into beads when left
+--    alone); elsewhere it comes back since the last wipe, or (side windows) follows a level per pane. The glass passes
+--    draw it over a Dual Kawase blur of the frame (rp_kawase.cs.hlsl: five small passes, skipped whenever nothing near the
+--    camera is fogged). Mist INSIDE the cabin (breath, wet clothes) would be out of the wipers' reach and is not drawn.
+--  * body mist: a faint satin bloom of condensation on cars that stand, most on the roof, the hood and the boot lid, not
+--    on a hood the engine has just warmed (rp_droplets.cs.hlsl).
+-- (One table: the main chunk is at LuaJIT's limit of 200 local variables.)
+local FOG = {
+  humid = 0, envFog = 0, night = 0, envAt = -1e9,
+  level = { front = 0, rear = 0, L = 0, R = 0 },             -- Lua's estimate per pane (the side windows draw it)
+  paneK = { front = 1.0, rear = 0.8, L = 0.65, R = 0.65 },    -- the airflow brings less mist to the rear and side glass
+  target = 0, kUp = 0.05, kDown = 0.03,
+  blurOn = false, bound = false,
+  shader = 'RainPuddles_KawaseShaderData', block = 'RainPuddles_StateBlockLin',
+  -- the Dual Kawase chain: each level a named target of its own, sized relative to its input (slot 0)
+  passes = {
+    { fx = 'RainPuddles_FogD1', src = '$backBuffer', dst = '#rpFogD1', scale = '0.5 0.5', up = false, prio = '98.96' },
+    { fx = 'RainPuddles_FogD2', src = '#rpFogD1', dst = '#rpFogD2', scale = '0.5 0.5', up = false, prio = '98.95' },
+    { fx = 'RainPuddles_FogD3', src = '#rpFogD2', dst = '#rpFogD3', scale = '0.5 0.5', up = false, prio = '98.94' },
+    { fx = 'RainPuddles_FogU2', src = '#rpFogD3', dst = '#rpFogU2', scale = '2 2', up = true, prio = '98.93' },
+    { fx = 'RainPuddles_FogU1', src = '#rpFogU2', dst = '#rpFogU1', scale = '2 2', up = true, prio = '98.92' },
+  },
+  body = {}, bodyPruneAt = 0,                                  -- [vid] = { m = mist, warm = engine heat on the hood, at }
+}
+
+function FOG.amount()
+  return (S.enabled and S.glassFog ~= false) and clamp(tonumber(S.glassFogAmount) or 0.6, 0, 1.5) or 0
+end
+
+function FOG.paneKey(W)
+  if W == nil then return nil end
+  if W == windshield then return 'front' end
+  if W == rearGlass then return 'rear' end
+  if W == SIDE.L then return 'L' end
+  if W == SIDE.R then return 'R' end
+  return nil
+end
+
+-- once per frame (onPreRender): humidity, how fast the glass fogs up and clears, each pane's level, whether the blur
+-- chain runs, and the body mist of the nearest cars
+function FOG.update(dt)
+  dt = math.max(tonumber(dt) or 0, 0)
+  local live = rainSt.live()
+  if T - FOG.envAt > 0.5 then
+    FOG.envAt = T
+    local d = nil
+    pcall(function()
+      local envc = core_environment
+      if envc and type(envc.getFogDensity) == 'function' then d = envc.getFogDensity() end
+    end)
+    d = tonumber(d)
+    -- (a clear day's haze is about 0.0005-0.001; a foggy morning from about 0.01)
+    FOG.envFog = (d and d == d) and clamp((d - 0.002) / 0.02, 0, 1) or 0
+    FOG.night = nightFactor()
+  end
+  local rain = clamp(S.rain, 0, 1)
+  local drizzle = 0
+  if rain > 0.005 then
+    drizzle = (0.4 + 0.6 * math.min(rain / 0.25, 1)) * (1 - 0.45 * clamp((rain - 0.5) / 0.5, 0, 1))
+  end
+  local h = math.max(drizzle, FOG.envFog, clamp(tonumber(EXT.flags.humidity) or 0, 0, 1), groundWetness() * 0.35)
+  h = live and clamp(h * (0.75 + 0.25 * FOG.night), 0, 1) or 0
+  if dt > 0 then FOG.humid = FOG.humid + (h - FOG.humid) * (1 - math.exp(-dt / 4)) end
+  if not live then FOG.humid = 0 end
+  -- the air rushing over the glass brings the mist to it: fogged up in ~25 s parked, ~5 s at 100 km/h; it clears slowly
+  -- when the air dries, quicker in the airflow. Under a roof no drizzle reaches the glass (the damp air still mists it).
+  local spd = playerBox and math.min(playerBox.speed or 0, 60) or 0
+  FOG.kUp = (1 / 18) * (0.55 + math.min(spd / 10, 3.0))
+  FOG.kDown = 1 / 40 + spd / 500
+  local on = S.enabled and S.glassFog ~= false and S.windshield
+  FOG.target = on and FOG.humid * (rainSt.player.on and 0.45 or 1) or 0
+  local maxL = 0
+  for key, pk in pairs(FOG.paneK) do
+    local tgt = FOG.target * pk
+    local cur = FOG.level[key] or 0
+    if dt > 0 then cur = cur + (tgt - cur) * (1 - math.exp(-dt * ((tgt > cur) and FOG.kUp or FOG.kDown))) end
+    if not on then cur = 0 end
+    FOG.level[key] = cur
+    maxL = math.max(maxL, cur)
+  end
+  -- the blur chain only runs while some glass of the player's car near the camera is fogged
+  local near = playerBox ~= nil and (cam.cockpit or (playerBox.d2 or 1e9) < 625)
+  local panes = windshield ~= nil or rearGlass ~= nil or SIDE.L ~= nil or SIDE.R ~= nil
+  FOG.blurOn = (on and FOG.bound and near and panes and maxL * FOG.amount() > 0.01) and true or false
+  FOG.bodyUpdate(dt)
+end
+
+-- body mist of the cars the droplet pass draws (b.mist 0..1 with the amount, b.warm 0..1)
+function FOG.bodyUpdate(dt)
+  local amount = (S.enabled and S.bodyMist ~= false) and clamp(tonumber(S.bodyMistAmount) or 0.35, 0, 1) or 0
+  local any = 0
+  for i = 1, math.min(#boxes, MAX_VEH_DROPS) do
+    local b = boxes[i]
+    local spd = (b.speed and b.speed == b.speed) and b.speed or 0
+    local moving = clamp((spd - 1.5) / 6, 0, 1)
+    -- a car that drives keeps the mist off (the airflow, the engine's heat); a parked one gathers it over ~45 s
+    local tgt = FOG.humid * (1 - 0.85 * moving) * (((b.covered or 0) > 0.5) and 0.6 or 1)
+    local e = FOG.body[b.id]
+    if not e then
+      e = { m = tgt, warm = (spd > 1.5) and 1 or 0 }        -- a car first seen already wears what its state gives
+      FOG.body[b.id] = e
+    end
+    e.at = T
+    if dt > 0 then
+      -- the hood: an engine that runs warms it within a minute, a parked car's cools in about 8 minutes
+      e.warm = e.warm + (((spd > 1.5) and 1 or 0) - e.warm) * (1 - math.exp(-dt / ((spd > 1.5) and 60 or 480)))
+      e.m = e.m + (tgt - e.m) * (1 - math.exp(-dt / ((tgt > e.m) and 45 or 6)))
+    end
+    b.mist, b.warm = e.m * amount, e.warm
+    any = math.max(any, b.mist)
+  end
+  FOG.bodyAny = any
+  if T - FOG.bodyPruneAt > 10 then
+    FOG.bodyPruneAt = T
+    for id, e in pairs(FOG.body) do if T - (e.at or 0) > 60 then FOG.body[id] = nil end end
+  end
+end
+
+-- the glass passes' fog constant (rpWindW): this pane's level, how long the mist takes to come back after a wipe, whether
+-- the blur chain ran this frame, the strength
+function FOG.paneConsts(fx, W)
+  local key = FOG.paneKey(W)
+  fx:setShaderConst('$rpWindW', fmt4(key and FOG.level[key] or 0, 1 / math.max(FOG.kUp, 0.01),
+    FOG.blurOn and 1 or 0, FOG.amount()))
+end
+
+-- the glass water's fog constant (rpGlassC): how fogged the glass gets, how fast it fogs up and clears, how fast moving
+-- water washes it off
+function FOG.glassSimConsts(fx, rear)
+  fx:setShaderConst('$rpGlassC', fmt4(FOG.target * (rear and FOG.paneK.rear or FOG.paneK.front), FOG.kUp, FOG.kDown, 1.5))
+end
+
+-- Dual Kawase pass i (1..5): kind, offset, first pass, and (first pass, from the seat) the cabin to leave out of the blur
+function FOG.kawaseConsts(fx, i)
+  setCommon(fx)
+  local p = FOG.passes[i]
+  local b = playerBox
+  local mask = (i == 1 and cam.cockpit and b ~= nil) and 1 or 0
+  fx:setShaderConst('$rpKawA', fmt4(p.up and 1 or 0, clamp(tonumber(S.glassFogBlur) or 1.25, 0.5, 3), (i == 1) and 1 or 0, mask))
+  if b then
+    fx:setShaderConst('$rpKawB', fmt4(b.cx, b.cy, b.cz, b.h[1]))
+    fx:setShaderConst('$rpKawC', fmt4(b.a0[1], b.a0[2], b.a0[3], b.h[2]))
+    fx:setShaderConst('$rpKawD', fmt4(b.a1[1], b.a1[2], b.a1[3], b.h[3]))
+    fx:setShaderConst('$rpKawE', fmt4(b.a2[1], b.a2[2], b.a2[3], 0))
+  else
+    fx:setShaderConst('$rpKawB', '0 0 -100000 0')
+    fx:setShaderConst('$rpKawC', '1 0 0 0')
+    fx:setShaderConst('$rpKawD', '0 1 0 0')
+    fx:setShaderConst('$rpKawE', '0 0 1 0')
+  end
+  local W = windshield
+  if W then
+    fx:setShaderConst('$rpKawF', fmt4(W.cx, W.cy, W.cz, 1))
+    fx:setShaderConst('$rpKawG', fmt4(W.nx, W.ny, W.nz, 0))
+  else
+    fx:setShaderConst('$rpKawF', '0 0 0 0')
+    fx:setShaderConst('$rpKawG', '0 0 1 0')
+  end
+end
+
+-- the droplet pass's body mist: x the strength (0 = none anywhere: the pass may skip), per car rpVehI (mist, hood heat)
+function FOG.bodyConsts(fx)
+  local any = 0
+  for i = 0, MAX_VEH_DROPS - 1 do
+    local b = boxes[i + 1]
+    local m = b and b.mist or 0
+    any = math.max(any, m)
+    fx:setShaderConst('$rpVehI' .. i, fmt4(m, b and b.warm or 0, 0, 0))
+  end
+  fx:setShaderConst('$rpDropE', fmt4(any, 0, 0, 0))
+end
+
 local function puddleConsts(fx)
   setCommon(fx)
   setVehConsts(fx, false)
@@ -3355,7 +3619,8 @@ local function puddleConsts(fx)
   local size = S.puddleSize * (0.92 + 0.16 * water)
   local depthMix = clamp(S.puddleRoughness * (1.10 - 0.20 * water), 0, 1)
   fx:setShaderConst('$rpPuddleA', fmt4(cov, S.puddleStrength, S.puddleReflection, S.tileSize))
-  fx:setShaderConst('$rpPuddleB', fmt4(S.puddleSoftness, S.puddleRipple, S.maxDistance, S.surfaceFilter))
+  -- y: the drawn rain rings beyond the simulation (only the rain's; the tyre wakes have their own strength, rpPuddleM.x)
+  fx:setShaderConst('$rpPuddleB', fmt4(S.puddleSoftness, S.puddleRipple * WAVE.rainK, S.maxDistance, S.surfaceFilter))
   fx:setShaderConst('$rpPuddleC', fmt4(depthMix, size, S.skyReflection, S.puddleNormal))
   fx:setShaderConst('$rpPuddleD', fmt4(S.reflectionBlur, S.ssrSteps, S.ssrThickness, groundWetness()))
   fx:setShaderConst('$rpPuddleE', fmt4(S.roadReflection, S.tireMarkGloss, S.vehicleMask and 1 or 0, tonumber(wetCall('nativeFilm', S)) or 0))
@@ -3394,12 +3659,13 @@ local function dropletConsts(fx)
   setCommon(fx)
   setVehConsts(fx, true)
   local rain = clamp(S.rain, 0, 1)
-  local density = S.dropletDensity * (0.15 + 0.85 * rain)
+  local density = (S.droplets and S.dropletDensity or 0) * (0.15 + 0.85 * rain)   -- 1.6: 0 = body mist only
   fx:setShaderConst('$rpDropA', fmt4(density, S.dropletSize * dropScale(), S.dropletRefraction, S.dropletSpeed))
   fx:setShaderConst('$rpDropB', fmt4(S.dropletShell, S.dropletSheen, S.dropletMaxDistance, rain))
   fx:setShaderConst('$rpDropC', fmt4(S.dropletSlide, S.dropletAero, 1.0, S.dropletInertia))
   fx:setShaderConst('$rpDropD', fmt4(S.dropletRunners, S.dropletTrails, S.dropletFresnel or defaults.dropletFresnel,
     S.dropletLightCatch or defaults.dropletLightCatch))   -- 1.2.1 w: light catch
+  FOG.bodyConsts(fx)                                      -- 1.6 body mist (rpDropE, rpVehI0..5)
 end
 
 -- camera lens droplets ---------------------------------------------------------------------
@@ -3641,6 +3907,7 @@ local function glassConsts(fx, W, flow, wip)
       fx:setShaderConst('$rpWindP' .. i, '0 0 0 0')
     end
   end
+  FOG.paneConsts(fx, W)                                               -- 1.6 glass fog
 end
 
 local function windshieldConsts(fx) glassConsts(fx, windshield, windFlow, wiper) end
@@ -3754,6 +4021,7 @@ function WAVE.glassConsts(fx, k, g)
     g.margin))
   -- x film a blade leaves (the 'Wiper trail width' setting), y rain lands, z evaporation (1/s)
   fx:setShaderConst('$rpGlassB', fmt4(0.3 + 0.7 * clamp(S.wiperTrail or 0.55, 0, 1), under and 0 or 1, 0.01, 0))
+  FOG.glassSimConsts(fx, g.rear)                                      -- 1.6 the mist on the glass (z)
 end
 
 local function splashConsts(fx)
@@ -3778,7 +4046,10 @@ local function rainConsts(fx)
   -- 1.0: less than half as many drops as before (in-game feedback: too much rain, twice)
   local prob = rainSt.on and clamp(0.02 + 0.45 * rain ^ 1.15, 0, 1) or 0
   fx:setShaderConst('$rpRainA', fmt4(S.rainStreakIntensity, prob, clamp(S.rainDropSize or 1.5, 0.3, 6) * 0.001, RAIN.maxDist))
-  fx:setShaderConst('$rpRainB', fmt4(rainSt.lx, rainSt.ly, rainSt.lz, 1.0))
+  -- w (1.6) how much of the rain shows: from the seat the streaks are seen through the windshield, and fogged it hides
+  -- most of them (this pass runs after the upscaler, after the glass passes, so they would be drawn sharp over the mist)
+  local fogDim = cam.cockpit and 0.75 * clamp((FOG.level.front or 0) * FOG.amount(), 0, 1) or 0
+  fx:setShaderConst('$rpRainB', fmt4(rainSt.lx, rainSt.ly, rainSt.lz, 1.0 - fogDim))
   -- the camera in the falling rain's frame, from the camera as it is drawn (setCommon), wrapped to the grids' period
   local qx, qy, qz = cam.x - rainSt.fx, cam.y - rainSt.fy, cam.z - rainSt.fz
   local pN, pF = 1024 * RAIN.nearCell, 1024 * RAIN.farCell
@@ -3816,10 +4087,9 @@ local function deleteObjects()
     names[#names + 1] = g.fxB
   end
   names[#names + 1] = WAVE.gs.shader
-  for _, n in ipairs(PROBES) do
-    names[#names + 1] = 'RainPuddles_ProbeFx' .. n
-    names[#names + 1] = 'RainPuddles_ProbeShader' .. n
-  end
+  for _, fp in ipairs(FOG.passes) do names[#names + 1] = fp.fx end         -- 1.6 glass fog blur
+  names[#names + 1] = FOG.shader
+  names[#names + 1] = FOG.block
   for _, name in ipairs(names) do
     local o = scenetree.findObject(name)
     if o then pcall(function() o:delete() end) end
@@ -3838,7 +4108,7 @@ local function applyEnabled()
   -- 1.0.1: nothing is drawn until a level runs (the main menu and loading screens showed lens drops and falling rain)
   local on = S.enabled and rainSt.live()
   local wantP = on and (S.puddles or S.wetGround)
-  local wantD = on and S.droplets
+  local wantD = on and (S.droplets or (S.bodyMist ~= false and (FOG.bodyAny or 0) > 0.002))   -- 1.6: + body mist
   local wantW = on and S.windshield and windshield ~= nil       -- 1.0: also outside (buildWindshield decides)
   local wantR = on and S.windshield and rearGlass ~= nil        -- 1.0: rear / hatch glass
   local wantSL = on and S.windshield and S.sideGlass and SIDE.L ~= nil   -- 1.0: side windows
@@ -3850,9 +4120,10 @@ local function applyEnabled()
   local wantMist = on and S.splashes and S.mistSim ~= false               -- 1.5 simulated mist
   local wantGlass = wantW and S.glassSim ~= false                         -- 1.5 glass water
   local wantGlassR = wantR and S.glassSim ~= false                        -- ... on the rear glass
+  local wantFog = on and FOG.blurOn                                       -- 1.6 glass fog blur (only while fogged)
   local key = tostring(wantP) .. tostring(wantD) .. tostring(wantW) .. tostring(wantS) .. tostring(wantL) .. tostring(wantR)
     .. tostring(wantRain) .. tostring(wantSL) .. tostring(wantSR) .. tostring(wantWave) .. tostring(wantMist)
-    .. tostring(wantGlass) .. tostring(wantGlassR)
+    .. tostring(wantGlass) .. tostring(wantGlassR) .. tostring(wantFog)
   if enabledCache == key then return end
   enabledCache = key
   skipEffect(FX_L, not wantL)
@@ -3866,6 +4137,7 @@ local function applyEnabled()
   skipEffect(WAVE.gs.fxB, not wantGlass)
   skipEffect(WAVE.gr.fxA, not wantGlassR)
   skipEffect(WAVE.gr.fxB, not wantGlassR)
+  for _, fp in ipairs(FOG.passes) do skipEffect(fp.fx, not wantFog) end
   skipEffect(FX_P, not wantP)
   skipEffect(FX_D, not wantD)
   skipEffect(FX_W, not wantW)
@@ -3892,10 +4164,8 @@ local function createObjects()
     { WAVE.gs.shader, 'rp_glass.cs.hlsl' },                         -- 1.5 glass water
     { SHADER_L, 'rp_lens.cs.hlsl', lensConsts },
     { SHADER_RAIN, 'rp_rain.cs.hlsl', rainConsts },
+    { FOG.shader, 'rp_kawase.cs.hlsl' },                            -- 1.6 glass fog: Dual Kawase blur
   }
-  for _, n in ipairs(PROBES) do
-    shaderDefs[#shaderDefs + 1] = { 'RainPuddles_ProbeShader' .. n, 'rp_probe' .. n .. '.cs.hlsl', puddleConsts }
-  end
   for _, def in ipairs(shaderDefs) do
     local shader = createObject('ShaderData')
     shader.DXComputShaderName = shaderDir .. def[2]
@@ -3916,6 +4186,18 @@ local function createObjects()
     block:setField('samplerStates', slot - 1, sampler)
   end
   block:registerObject(BLOCK)
+  -- 1.6 the blur chain reads its input through a linear sampler on slot 0 (bilinear taps are what make Kawase cheap) and
+  -- the depth through a point sampler on slot 1
+  local blockLin = createObject('GFXStateBlockData')
+  blockLin.zDefined = true
+  blockLin.zEnable = false
+  blockLin.zWriteEnable = false
+  blockLin.samplersDefined = true
+  for slot, sampler in ipairs({ 'SamplerClampLinear', 'SamplerClampPoint', 'SamplerClampLinear',
+                                'SamplerClampLinear', 'SamplerClampLinear', 'SamplerClampLinear' }) do
+    blockLin:setField('samplerStates', slot - 1, sampler)
+  end
+  blockLin:registerObject(FOG.block)
 
   -- 1.0 slot 5 of the puddle pass: the surroundings capture once the engine lists it, otherwise any valid texture (the
   -- shader does not read it then)
@@ -3933,6 +4215,9 @@ local function createObjects()
   local glassTex = WAVE.gs.bound and '#rpGlassB' or maskPath(S.maskB)
   WAVE.gr.bound = S.windshield and S.rearGlass and S.glassSim ~= false and true or false
   local glassTexR = WAVE.gr.bound and '#rpGlassD' or maskPath(S.maskB)
+  -- 1.6 glass fog: slot 2 of every glass pass holds the blurred frame (an unused puddle mask was bound there before)
+  FOG.bound = S.windshield and S.glassFog ~= false and true or false
+  local fogTex = FOG.bound and '#rpFogU1' or maskPath(S.maskA)
   local effects = {
     -- 1.5 simulated ripples: three steps per frame before the puddle pass, each writing one 512 x 512 named target from
     -- the other two (e[6]: own target instead of the frame)
@@ -3948,12 +4233,12 @@ local function createObjects()
     { FX_RAIN, SHADER_RAIN, '98.8', { '#prepass[RT0]', '#prepass[Depth]', '$backBuffer' }, 'UpscaleOverlay' },
     -- 1.0: depth on slot 1 (point sampler) like the passes above; on slots 3 / 4 (linear) it read as empty, so the
     -- windshield rain covered the dashboard and pillars and the spray was not hidden behind the bodywork
-    { FX_W, SHADER_W, '98',  { '$backBuffer', '#prepass[Depth]', maskPath(S.maskA), glassTex, wiperMaskPath, dropAtlasPath } },
+    { FX_W, SHADER_W, '98',  { '$backBuffer', '#prepass[Depth]', fogTex, glassTex, wiperMaskPath, dropAtlasPath } },
     -- 1.0: the rear / hatch glass, a second pass of the windshield shader with its own pane and drop physics
-    { FX_R, SHADER_W, '98.5', { '$backBuffer', '#prepass[Depth]', maskPath(S.maskA), glassTexR, wiperMaskPath, dropAtlasPath } },
+    { FX_R, SHADER_W, '98.5', { '$backBuffer', '#prepass[Depth]', fogTex, glassTexR, wiperMaskPath, dropAtlasPath } },
     -- 1.0: the side windows, one more pass per side (no wipers)
-    { SIDE.fxL, SHADER_W, '98.6', { '$backBuffer', '#prepass[Depth]', maskPath(S.maskA), maskPath(S.maskB), wiperMaskPath, dropAtlasPath } },
-    { SIDE.fxR, SHADER_W, '98.7', { '$backBuffer', '#prepass[Depth]', maskPath(S.maskA), maskPath(S.maskB), wiperMaskPath, dropAtlasPath } },
+    { SIDE.fxL, SHADER_W, '98.6', { '$backBuffer', '#prepass[Depth]', fogTex, maskPath(S.maskB), wiperMaskPath, dropAtlasPath } },
+    { SIDE.fxR, SHADER_W, '98.7', { '$backBuffer', '#prepass[Depth]', fogTex, maskPath(S.maskB), wiperMaskPath, dropAtlasPath } },
     { FX_S, SHADER_S, '97',  { '$backBuffer', '#prepass[Depth]', maskPath(S.maskA), maskPath(S.maskB), mistTex } },
     -- last: the lens sits on top of everything (slot 2 = linear sampler for the droplet atlas)
     { FX_L, SHADER_L, '96',  { '$backBuffer', maskPath(S.maskA), dropAtlasPath } },
@@ -3994,11 +4279,15 @@ local function createObjects()
       constSetters[g.fxB] = function(fx) WAVE.glassConsts(fx, 2, g) end
     end
   end
-  for _, n in ipairs(PROBES) do
-    local fxn = 'RainPuddles_ProbeFx' .. n
-    effects[#effects + 1] = { fxn, 'RainPuddles_ProbeShader' .. n, tostring(90 - n),
-      { '#prepass[RT0]', '#prepass[Depth]', '$backBuffer', maskPath(S.maskA), maskPath(S.maskB) } }
-    constSetters[fxn] = puddleConsts
+  -- 1.6 glass fog: the Dual Kawase chain, after the droplets (99) and before the glass passes (98.7 .. 98), in the same
+  -- bin as they are (the named targets are written and read within the frame). Each level is sized relative to its
+  -- input in slot 0 (e.scale: targetScale), so it follows the render resolution, upscalers included.
+  if FOG.bound then
+    for i, fp in ipairs(FOG.passes) do
+      local tex = (i == 1) and { fp.src, '#prepass[Depth]' } or { fp.src }
+      effects[#effects + 1] = { fp.fx, FOG.shader, fp.prio, tex, 'UpscaleDispatch', fp.dst, scale = fp.scale, block = FOG.block }
+      constSetters[fp.fx] = function(fx) FOG.kawaseConsts(fx, i) end
+    end
   end
 
   for _, e in ipairs(effects) do
@@ -4019,7 +4308,7 @@ local function createObjects()
     fx:setField('renderBin', 0, bin or 'UpscaleDispatch')
     fx:setField('renderPriority', 0, priority)
     fx:setField('shader', 0, shaderName)
-    fx:setField('stateBlock', 0, BLOCK)
+    fx:setField('stateBlock', 0, e.block or BLOCK)
     for slot, texture in ipairs(textures) do
       fx:setField('texture', slot - 1, texture)
     end
@@ -4029,7 +4318,12 @@ local function createObjects()
     if e[6] then
       -- 1.5: a simulation target of its own (half floats, fixed size; it keeps its contents from frame to frame)
       pcall(function() fx:setField('targetFormat', 0, 'GFXFormatR16G16B16A16F') end)
-      pcall(function() fx:setField('targetSize', 0, e[7] or string.format('%d %d', WAVE.N, WAVE.N)) end)
+      if e.scale then
+        -- 1.6: relative to the input (targetSize stays 0, so the engine sizes it from slot 0 x targetScale)
+        pcall(function() fx:setField('targetScale', 0, e.scale) end)
+      else
+        pcall(function() fx:setField('targetSize', 0, e[7] or string.format('%d %d', WAVE.N, WAVE.N)) end)
+      end
     end
     pcall(function() fx.allowReflectPass = false end)
     fx:registerObject(fxName)
@@ -4151,6 +4445,10 @@ function updateWiper(dt)
   local lowT, highT = 1.5 / k, 1.0 / k                                -- seconds per out + back (normal / fast)
   -- rain sensor: water landing on the glass (1 = heavy rain while parked); driving into the rain adds up to 2.5x
   local wet = clamp(S.rain, 0, 1) * (1 + clamp((windFlow.speed or 0) / 20, 0, 1.5))
+  -- 1.6: an optical rain sensor also sees mist on the glass: in fog or drizzle it wipes now and then, more often the
+  -- thicker the mist (it comes back faster at speed, so the pause shrinks with the speed as it does with the rain)
+  local fogWet = 0.3 * (FOG.level.front or 0) * FOG.amount() * (1 + clamp((windFlow.speed or 0) / 25, 0, 1.5))
+  wet = math.max(wet, fogWet)
   -- 1.0 tunnels: no rain lands under a roof. The sensor keeps the water it saw before for a couple more sweeps (two,
   -- three when driving fast; counted in rainSt.updateWet), then the wipers stop until the car is back in the rain.
   local ps = rainSt.player
@@ -4167,7 +4465,7 @@ function updateWiper(dt)
   if m == 1 and need > supN * 0.667 then m = 2 elseif m == 2 and need < supN * 0.545 then m = 1 end   -- with hysteresis
   if m == 2 and need > supN then m = 3 elseif m == 3 and need < supN * 0.917 then m = 2 end
   wiper.sensorMode = m
-  local auto = S.enabled and S.windshield and S.wiperAuto and S.rain > 0.04
+  local auto = S.enabled and S.windshield and S.wiperAuto and (S.rain > 0.04 or fogWet > 0.05)
   -- Animated Wipers on the player's car (bridge)? Its stalk value is then the bridge's business, not the player's hand.
   local aws = S.enabled and S.windshield and awFor(playerBox)
   -- a stalk the player has moved overrides the rain sensor: off / intermittent / normal / fast
@@ -4408,14 +4706,38 @@ end
 
 -- hooks ------------------------------------------------------------------------------------
 
+-- 1.6 a car jumped: the game reset it, it was teleported or respawned, or (updateAccel) its box moved further in a frame
+-- than it could drive. Its speed readings around the jump are meaningless, so its tyres stay out of the spray, the wakes
+-- and the simulated mist for JUMP.hold s and then fade back in. For the player's car the simulated air starts again from
+-- calm, and the smoothed motions (lens drops, glass drops, falling-rain lean) start from rest.
+function JUMP.handle(vid)
+  vid = tonumber(vid)
+  if not vid then return end
+  JUMP.tyreHold[vid] = T + JUMP.hold
+  if accelState[vid] then
+    local st = accelState[vid]
+    st.ax, st.ay, st.az, st.px = 0, 0, 0, nil
+  end
+  if playerBox == nil or playerBox.id == vid then
+    -- three frames of still air, no mist, no pressure, starting with this one (its passes run after this)
+    WAVE.ms.fresh, WAVE.ms.zc = math.max(WAVE.ms.fresh or 0, 3), nil
+    lens.speed, lens.vx, lens.vy, lens.vz = 0, 0, 0, 0
+    for _, f in ipairs({ windFlow, rearFlow, SIDE.flowL, SIDE.flowR }) do f.speed, f.fa, f.fb, f.vx, f.vy = 0, 0, 0, 0, 0 end
+    rainSt.vx, rainSt.vy, rainSt.vz, rainSt.px = 0, 0, 0, nil
+  end
+end
+
 local function onExtensionLoaded()
   if extensions and not extensions.rainPuddlesWet then pcall(extensions.load, 'rainPuddlesWet') end
   if extensions and not extensions.rainPuddlesHydro then pcall(extensions.load, 'rainPuddlesHydro') end   -- 1.0
+  if extensions and not extensions.rainPuddlesAudio then pcall(extensions.load, 'rainPuddlesAudio') end   -- 1.6 rain sound
   loadSettings()
   updateCamera()
   rebuild()
   pushSettings()
   log('I', TAG, 'v' .. VERSION .. ' loaded: rain=' .. tostring(S.rain) .. ', windshield=' .. tostring(S.windshield))
+  log('W', TAG, 'v' .. VERSION .. ' is a PRE-RELEASE: it has not been tested in game. Please report bugs in the issue tab: '
+    .. 'https://github.com/Blaze-Archi/ForeverWEATHER/issues')
 end
 
 local function onExtensionUnloaded()
@@ -4476,6 +4798,14 @@ local function onPreRender(dtReal, dtSim)
   WAVE.glassUpdate()                                               -- 1.5 glass water: a new pane starts dry
   if S.enabled and (S.puddles or S.wetGround or S.droplets or S.windshield or S.splashes or S.lens) then
     collectBoxes()
+    -- 1.6: cars that jumped this frame (teleport test in updateAccel) are held before their tyres are read
+    if next(JUMP.vids) then
+      for vid in pairs(JUMP.vids) do JUMP.handle(vid) end
+      JUMP.vids = {}
+    end
+    for vid, untilT in pairs(JUMP.tyreHold) do
+      if untilT < T - 5 then JUMP.tyreHold[vid] = nil end
+    end
     buildWindshield()
     collectTyres(frameDtSim)
   else
@@ -4492,6 +4822,9 @@ local function onPreRender(dtReal, dtSim)
   updateLens(frameDtSim, dtReal)
   updateWindFlow(frameDtSim)
   updateWetness(frameDtSim)
+  -- 1.6 glass fog and body mist (humidity, pane levels, whether the blur chain runs; after the shelter and car wetness)
+  local okF, errF = pcall(FOG.update, frameDtSim)
+  if not okF then warnOnce('fog_update', 'glass fog update failed: ' .. tostring(errF)) end
   -- 1.0 own falling rain, and the surroundings capture for the reflection fallback (bound to the puddle pass once the
   -- engine lists its texture; rebuilt when that changes)
   local okRain, errRain = pcall(rainSt.update, frameDtSim)
@@ -4553,7 +4886,8 @@ M.setSetting = function(key, value)
 
   -- 1.5: slot 5 of the puddle pass (the water), slot 4 of the spray pass and the mist passes
   if key == 'maskA' or key == 'maskB' or key == 'rippleSim' or key == 'puddles' or key == 'mistSim' or key == 'splashes'
-    or key == 'glassSim' or key == 'windshield' or key == 'rearGlass' then             -- (1.5: slot 3 of the glass passes)
+    or key == 'glassSim' or key == 'windshield' or key == 'rearGlass'                   -- (1.5: slot 3 of the glass passes)
+    or key == 'glassFog' then                                                           -- (1.6: slot 2, the blur chain)
     rebuild()
   elseif key == 'rain' or key == 'precipitation' or key == 'precipMaxDrops' then
     updateCamera()
@@ -4578,7 +4912,8 @@ M.setExternalWeather = function(src, values, opts)
   opts = (type(opts) == 'table') and opts or {}
   local first = (EXT.src == nil)
   EXT.src, EXT.label = src, tostring(opts.label or src)
-  EXT.flags = { wetFloor = clamp(tonumber(opts.wetFloor) or 0, 0, 1) }
+  EXT.flags = { wetFloor = clamp(tonumber(opts.wetFloor) or 0, 0, 1),
+                humidity = clamp(tonumber(opts.humidity) or 0, 0, 1) }   -- 1.6: damp air (glass fog, body mist)
   local touched, precip, switch = {}, false, first
   for k, v in pairs(values) do
     local def = defaults[k]
@@ -4674,8 +5009,14 @@ M.getDiagnostics = function()
     wheels = #wheels,
     time = T,
     version = VERSION,
+    -- 1.6: builds are published as GitHub pre-releases: untested in game, bugs go to the repository's issue tab
+    prerelease = true,
+    issues = 'https://github.com/Blaze-Archi/ForeverWEATHER/issues',
     wet = wetCall('getStatus'),
     hydro = (extensions.rainPuddlesHydro and extensions.rainPuddlesHydro.getStatus) and extensions.rainPuddlesHydro.getStatus() or nil,
+    audio = (extensions.rainPuddlesAudio and extensions.rainPuddlesAudio.getStatus) and extensions.rainPuddlesAudio.getStatus() or nil,
+    fog = { humid = math.floor(FOG.humid * 100 + 0.5) / 100, front = math.floor((FOG.level.front or 0) * 100 + 0.5) / 100,
+            blur = FOG.blurOn and true or false, bodyMist = math.floor((FOG.bodyAny or 0) * 100 + 0.5) / 100 },   -- 1.6
     rayCast = (type(castRayStatic) == 'function'),
     nativeFilm = tonumber(wetCall('nativeFilm', S)) or 0,   -- 1 = the ground reflection is drawn by BeamNG's PBR + SSR
     groundWetness = groundWetness(),
@@ -4956,6 +5297,22 @@ M.getRainNow = function()
   return { rain = on and clamp(S.rain, 0, 1) or 0, wet = on and groundWetness() or 0, midnight = false }
 end
 
+-- 1.6 for the rain sound (rainPuddlesAudio, a few times a second): the rain, where the listener is and what shelters it.
+-- exposure: open sky around the camera (rainSt.exposure); cockpit: an in-car view (the car body muffles the rain and its
+-- roof drums); carOpen: how much the player's car stands in the rain (0 under a roof / in a tunnel).
+M.getAudioState = function()
+  local live = (S.enabled and rainSt.live()) and true or false
+  local e, ready = rainSt.exposure()
+  local pb = playerBox
+  return {
+    live = live, on = live and S.rainAudio ~= false, rain = live and clamp(S.rain, 0, 1) or 0,
+    volume = clamp(tonumber(S.rainAudioVolume) or 0.8, 0, 1.5),
+    exposure = e, gridReady = ready, camCovered = rainSt.camCovered and true or false,
+    cockpit = cam.cockpit and true or false, carOpen = pb and (1 - clamp(pb.covered or 0, 0, 1)) or 1,
+    speed = pb and math.min(pb.speed or 0, 80) or 0, humid = FOG.humid,
+  }
+end
+
 -- Console / UI: extensions.rainPuddles.snapWetness() - skip the wet-up / drying time (ground = current rain now)
 M.snapWetness = function()
   wetSim.ground, wetSim.puddle = clamp(S.rain, 0, 1), clamp(S.rain, 0, 1)
@@ -4979,6 +5336,7 @@ M.onVehicleSpawned = function(vid)
   if vid then wiperProp[vid], wiperOut[vid], wiperStalk[vid] = nil, nil, nil end
   if vid then awState[vid] = nil end                         -- Animated Wipers reloads the car: load the bridge again
   if vid then glassMesh[vid] = nil end                       -- new car / config: read its glass meshes again
+  if vid then JUMP.tyreHold[vid] = T + JUMP.hold end         -- 1.6: a fresh car settles before its tyres throw spray
 end
 
 -- Called from vehicle Lua (rainPuddlesWiperBridge.lua) when the car runs the "Animated Wipers" mod (1.0).
@@ -5018,13 +5376,11 @@ end
 M.onVehicleResetted = function(vid)
   if vid then profiles[vid] = nil end                        -- repaired: new roof line
   -- 1.0: a reset stops the car at once, so the smoothed speeds go too (lens drops and glass drops used to keep streaking
-  -- and ease to a halt after a reset at speed); the body drops' acceleration filter starts again from the new state
+  -- and ease to a halt after a reset at speed); the body drops' acceleration filter starts again from the new state.
+  -- 1.6: and its tyres are held out of the spray and the mist for a moment, and for the player's car the simulated air
+  -- starts again from calm (JUMP.handle)
   if vid then accelState[vid] = nil end
-  if vid and (not playerBox or playerBox.id == vid) then
-    lens.speed, lens.vx, lens.vy, lens.vz = 0, 0, 0, 0
-    for _, f in ipairs({ windFlow, rearFlow, SIDE.flowL, SIDE.flowR }) do f.speed, f.fa, f.fb, f.vx, f.vy = 0, 0, 0, 0, 0 end
-    rainSt.vx, rainSt.vy, rainSt.vz, rainSt.px = 0, 0, 0, nil
-  end
+  JUMP.handle(vid)
 end
 
 -- Called from vehicle Lua (rainPuddlesProbe.reportWheels) with the tread speed of each wheel (m/s, by wheel index).

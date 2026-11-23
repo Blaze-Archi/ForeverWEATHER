@@ -64,6 +64,7 @@ export const DEBUG_VIEWS = [
   { v: 21, l: "Simulated water (slope as colour, grey = level, blue = outside the simulation)" },
   { v: 22, l: "Simulated mist (orange = mist; bottom left: the air layers from above, top left: target check)" },
   { v: 23, l: "Glass water (blue = water, white = pushed-together lines, yellow = wiper film, green = body beside the glass)" },
+  { v: 24, l: "Glass fog (orange = mist on the glass; cyan tint = the blur chain is idle)" },
 ]
 
 export const SLIDERS = {
@@ -105,7 +106,7 @@ export const SLIDERS = {
     { k: "puddleStrength", l: "Darkening", a: 0, b: 1, st: 0.01, d: 2 },
     { k: "puddleRoughness", l: "Water roughness (0 = mirror)", a: 0, b: 1, st: 0.01, d: 2 },
     { k: "puddleNormal", l: "Normal detail", a: 0, b: 2, st: 0.01, d: 2 },
-    { k: "puddleRipple", l: "Rain ripples", a: 0, b: 2, st: 0.05, d: 2, hint: "Rain rings in the puddles. Near you they come from the water simulation (see 'Simulated ripples'), further away they are drawn." },
+    { k: "puddleRipple", l: "Rain ripples", a: 0, b: 2, st: 0.05, d: 2, hint: "Rain rings in the puddles. Near you they come from the water simulation (see 'Simulated ripples'), further away they are drawn. Since 1.6 the rain's rings are half as strong at the same value (calmer puddles); the tyres' wakes keep their full strength." },
     { k: "maxDistance", l: "Distance (m)", a: 30, b: 600, st: 5, d: 0, hint: "How far from the camera puddles are drawn (with 'Only on roads': on the 64 road pieces nearest to the camera, ahead of it first)." },
     { k: "puddleMaxSlope", l: "Steepest ground for puddles (%)", a: 1, b: 30, st: 0.5, d: 1, hint: "Water only stands on level ground: puddles fade out on slopes, from 60 % of this grade to it (5 % = about 3 degrees; flat streets and their camber keep their puddles). Measured from the road's real shape, and the tyres feel the same puddles. 30 = puddles on slopes too." },
     { k: "vehMaskHeight", l: "Keep off cars: mask height (m)", a: 0.03, b: 0.8, st: 0.01, d: 2, hint: "Inside a car's box, anything this far above the road counts as the car (no puddles or wet ground on it). Lower it if puddles still show on low bodywork, raise it if a dry patch appears around the car." },
@@ -160,6 +161,16 @@ export const SLIDERS = {
     { k: "glassLightCatch", l: "Glass drops: light catch", a: 0, b: 2, st: 0.05, d: 2, hint: "As the beads' Light catch. From outside, rims catch the bright sky over the dark cabin. 0 = off." },
     { k: "wiperSpeed", l: "Wiper speed", a: 0.1, b: 3, st: 0.05, d: 2 },
     { k: "wiperTrail", l: "Wiper trail width", a: 0, b: 1, st: 0.01, d: 2, hint: "How much of a film the blades leave behind (with Simulated glass water: the hazy, streaky smear after each wipe)." },
+  ],
+  // 1.6 glass fog and body mist
+  fog: [
+    { k: "glassFogAmount", l: "Glass fogging", a: 0, b: 1.5, st: 0.01, d: 2, hint: "How fogged the glass gets in damp air: a fine mist on the outside of the windshield, rear and side windows (drizzle, fog, condensation on glass the airflow cools). The wipers clear it and it comes back, faster when you drive; running drops cut clear channels through it. 0 = never." },
+    { k: "glassFogBlur", l: "Fogged view softness", a: 0.5, b: 3, st: 0.05, d: 2, hint: "How soft the view through fogged glass gets (the Dual Kawase blur's reach). The blur only runs while some glass of your car near the camera is fogged." },
+    { k: "bodyMistAmount", l: "Body mist", a: 0, b: 1, st: 0.01, d: 2, hint: "A faint satin bloom of condensation on cars that stand in damp air: most on the roof, the hood and the boot lid, not on a hood the engine has just warmed. Driving keeps it off. Easiest to see on dark paint." },
+  ],
+  // 1.6 rain sound
+  audio: [
+    { k: "rainAudioVolume", l: "Rain volume", a: 0, b: 1.5, st: 0.01, d: 2, hint: "Loudness of the rain sound (on top of the game's own volume settings)." },
   ],
   spray: [
     { k: "splashIntensity", l: "Spray intensity", a: 0, b: 2, st: 0.01, d: 2 },
