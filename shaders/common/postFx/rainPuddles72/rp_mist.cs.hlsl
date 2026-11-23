@@ -83,11 +83,33 @@ float rpMistCurl(Texture2D<float4> tex, int l, int2 q, bool srgb, float dx)
     return ((vR - vL) - (uU - uD)) / (2.0 * dx);
 }
 
+// 1.6: the air's speed is capped as a vector before it is stored. The packing clips each component on its own, which
+// turns the flow at the range limit, and a turned flow is a false swirl the confinement then feeds on (the runaway seen
+// after a reset). A broken value (NaN / inf) becomes the calm air of its layer.
+float2 rpMistCapVel(float2 v, float2 calm)
+{
+    if (rpBadF(v.x) || rpBadF(v.y))
+    {
+        return calm;
+    }
+    const float m = length(v);
+    const float cap = RP_MIST_VMAX * 0.9;
+    return (m > cap) ? v * (cap / m) : v;
+}
+
 // the state's texel in plane A (u, density upper half) or plane B (v, density lower half)
-float4 rpMistPackState(float3 s, int plane)
+// (1.6: the air speed rounded stochastically, rpPack16D; dither 0.5 = plain rounding)
+float4 rpMistPackState(float3 s, int plane, float dither)
 {
     const float2 e = rpPackU16(sqrt(saturate(s.z / RP_MIST_DMAX)));
-    return (plane == 0) ? float4(rpPack16(s.x, RP_MIST_VMAX), e.x, 1.0) : float4(rpPack16(s.y, RP_MIST_VMAX), e.y, 1.0);
+    return (plane == 0) ? float4(rpPack16D(s.x, RP_MIST_VMAX, dither), e.x, 1.0)
+                        : float4(rpPack16D(s.y, RP_MIST_VMAX, dither), e.y, 1.0);
+}
+
+// 1.6: the dither of texel t in pass kind this frame (independent per texel, pass and frame)
+float rpMistDither(int2 t, int kind)
+{
+    return rpRand(rpHash3(int3(t.x, t.y, (int(rpMistH.x) & 0xFFFFFF) * 4 + kind)));
 }
 
 PFX_NUMTHREADS
@@ -116,7 +138,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     if (rpMistA.w < 0.5)
     {
         // the first frames after a start or a reset: calm air, no mist, no pressure
-        pfxOut[storePos] = (kind == 0 || kind == 3) ? rpMistPackState(float3(rpMistWind(l), 0.0), plane)
+        pfxOut[storePos] = (kind == 0 || kind == 3) ? rpMistPackState(float3(rpMistWind(l), 0.0), plane, 0.5)
                                                      : float4(rpPack16(0.0, 1.0), 0.5, 1.0);
         return;
     }
@@ -138,13 +160,24 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     }
     if (kind == 2)
     {
-        // one Jacobi iteration of lap(p) = div (the first one reads the last frame's pressure, moved with the grid)
+        // 1.6: paused (no time step): the pressure stays as it is, so the air does not drift while the game waits
+        if (dt <= 0.0)
+        {
+            pfxOut[storePos] = float4(rpPack16(rpMistScalar(mistIn0, l, q, srgb0, RP_MIST_PMAX), RP_MIST_PMAX), 0.5, 1.0);
+            return;
+        }
+        // one Jacobi iteration of lap(p) = div (the first one reads the last frame's pressure, moved with the grid).
+        // 1.6: that warm start is damped (rpMistG.x, < 1 only in the first iteration). 14 iterations barely touch the
+        // pressure's widest patterns, so an undamped warm start kept pushing the air for seconds after the wake that
+        // made it was gone (a slow slosh around a parked car), and a pressure saturated by a reset stayed for good.
         const float pL = rpMistScalar(mistIn0, l, q - int2(1, 0), srgb0, RP_MIST_PMAX);
         const float pR = rpMistScalar(mistIn0, l, q + int2(1, 0), srgb0, RP_MIST_PMAX);
         const float pD = rpMistScalar(mistIn0, l, q - int2(0, 1), srgb0, RP_MIST_PMAX);
         const float pU = rpMistScalar(mistIn0, l, q + int2(0, 1), srgb0, RP_MIST_PMAX);
         const float div = rpMistScalar(mistIn1, l, c, srgb1, RP_MIST_QMAX);
-        const float p = (pL + pR + pD + pU - dx * dx * div) * 0.25;
+        const float pK = saturate(rpMistG.x);
+        float p = (pK * (pL + pR + pD + pU) - dx * dx * div) * 0.25;
+        p = rpBadF(p) ? 0.0 : clamp(p, -RP_MIST_PMAX, RP_MIST_PMAX);
         pfxOut[storePos] = float4(rpPack16(p, RP_MIST_PMAX), 0.5, 1.0);
         return;
     }
@@ -152,14 +185,18 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     {
         // projection: the pressure gradient off the velocity
         float3 s = rpMistState(mistIn0, l, c, srgb0);
-        const float pL = rpMistScalar(mistIn1, l, c - int2(1, 0), srgb1, RP_MIST_PMAX);
-        const float pR = rpMistScalar(mistIn1, l, c + int2(1, 0), srgb1, RP_MIST_PMAX);
-        const float pD = rpMistScalar(mistIn1, l, c - int2(0, 1), srgb1, RP_MIST_PMAX);
-        const float pU = rpMistScalar(mistIn1, l, c + int2(0, 1), srgb1, RP_MIST_PMAX);
-        // (rpMistF.w < 1: part of the air a car pushes goes over it in the real, 3D flow; fully incompressible layers
-        // pushed it all aside, and the mist with it)
-        s.xy -= rpMistF.w * float2(pR - pL, pU - pD) / (2.0 * dx);
-        pfxOut[storePos] = rpMistPackState(s, plane);
+        if (dt > 0.0)
+        {
+            const float pL = rpMistScalar(mistIn1, l, c - int2(1, 0), srgb1, RP_MIST_PMAX);
+            const float pR = rpMistScalar(mistIn1, l, c + int2(1, 0), srgb1, RP_MIST_PMAX);
+            const float pD = rpMistScalar(mistIn1, l, c - int2(0, 1), srgb1, RP_MIST_PMAX);
+            const float pU = rpMistScalar(mistIn1, l, c + int2(0, 1), srgb1, RP_MIST_PMAX);
+            // (rpMistF.w < 1: part of the air a car pushes goes over it in the real, 3D flow; fully incompressible
+            // layers pushed it all aside, and the mist with it)
+            s.xy -= rpMistF.w * float2(pR - pL, pU - pD) / (2.0 * dx);
+        }
+        s.xy = rpMistCapVel(s.xy, rpMistWind(l));
+        pfxOut[storePos] = rpMistPackState(s, plane, rpMistDither(t, kind));
         return;
     }
 
@@ -192,8 +229,12 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     }
 
     // vorticity confinement: a push around each swirl's centre, toward where the curl is stronger (Fedkiw et al. 2001);
-    // only on real swirls (above 1-4 turns per 2 pi seconds), not on noise
-    if (rpMistB.z > 0.0)
+    // only on real swirls (above 1-4 turns per 2 pi seconds), not on noise.
+    // 1.6: and only where the air really moves against the wind (rpMistG.w). Confinement gives back swirls a moving flow
+    // loses to the coarse grid; in nearly still air - a parked car, the seconds after a reset - there is nothing to give
+    // back, and its push only fed on what was left of the last wake until that air ran at the range limit.
+    const float calmK = smoothstep(rpMistG.w * 0.25, max(rpMistG.w, 0.05), length(s0.xy - rpMistWind(l)));
+    if (rpMistB.z > 0.0 && calmK > 0.0)
     {
         const float w = rpMistCurl(mistIn0, l, q, srgb0, dx);
         const float wR = abs(rpMistCurl(mistIn0, l, q + int2(1, 0), srgb0, dx));
@@ -202,7 +243,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
         const float wD = abs(rpMistCurl(mistIn0, l, q - int2(0, 1), srgb0, dx));
         float2 nG = float2(wR - wL, wU - wD);
         nG /= (length(nG) + 1e-4);
-        s.xy += dt * rpMistB.z * dx * w * smoothstep(1.0, 4.0, abs(w)) * float2(nG.y, -nG.x);
+        s.xy += dt * rpMistB.z * dx * w * smoothstep(1.0, 4.0, abs(w)) * calmK * float2(nG.y, -nG.x);
     }
 
     // the layers mix: the mist spreads up and down, each layer drags a little on the ones next to it
@@ -225,9 +266,12 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
         s.xy += (nb.xy - s.xy) * ex * 0.5;
     }
 
-    // the air calms toward the wind, the mist evaporates
+    // the air calms toward the wind, the mist evaporates.
+    // 1.6: dense mist also falls out (rpMistG.z): in a thick cloud the fine drops meet and grow until they rain back onto
+    // the road. Thin trails keep their ~1.5 s; a cloud fed in one place (a wheelspin standing still) levels off at about
+    // half the density it reached before, instead of piling up to the range limit.
     s.xy = lerp(s.xy, rpMistWind(l), 1.0 - exp(-dt * rpMistD.w));
-    s.z *= exp(-dt * rpMistB.w);
+    s.z *= exp(-dt * (rpMistB.w + max(rpMistG.z, 0.0) * max(s.z, 0.0)));
 
     // cars and tyres
     const float2 Pw = (rpMistC.xy + float2(c) + 0.5) * dx;          // this cell's centre in the world
@@ -236,49 +280,69 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     float4 tA[8] = { rpTyreA0, rpTyreA1, rpTyreA2, rpTyreA3, rpTyreA4, rpTyreA5, rpTyreA6, rpTyreA7 };
     float4 tB[8] = { rpTyreB0, rpTyreB1, rpTyreB2, rpTyreB3, rpTyreB4, rpTyreB5, rpTyreB6, rpTyreB7 };
     float4 tC[8] = { rpTyreC0, rpTyreC1, rpTyreC2, rpTyreC3, rpTyreC4, rpTyreC5, rpTyreC6, rpTyreC7 };
+    // 1.6: the fastest tyre the forcing believes. Lua already drops impossible readings and holds a car's tyres for a
+    // moment after a reset or teleport; this is the shader's own guard, so one bad frame can never fill the grid.
+    const float vCap = clamp(rpMistG.y, 1.0, 120.0);
     [unroll]
     for (int ti = 0; ti < 8; ti++)
     {
         if (tC[ti].y > 0.5)
         {
             const float2 dir2 = tB[ti].xy;
-            const float g = max(tB[ti].z, 0.0);                   // ground speed
-            const float tread = clamp(tB[ti].w, 0.0, 80.0);       // tread speed (spin; never more than a real tyre)
+            const float g = clamp(tB[ti].z, 0.0, vCap);                 // ground speed
+            const float tread = clamp(tB[ti].w, 0.0, min(vCap, 80.0));  // tread speed (spin; never more than a real tyre)
             const float v = max(g, tread);
             const float2 d = Pw - tA[ti].xy;
-            if (v > 0.5 && dot(d, d) < 36.0)
+            if (v > 0.5 && dot(d, d) < 36.0 && dot(dir2, dir2) > 0.25)
             {
                 const float hw = max(tA[ti].w, 0.05);
                 const float along = dot(d, dir2);
                 // the wheel and the body beside it drag the air along (at a share of the car's speed: the air slips
                 // past the bodywork), over the path covered this frame (a cell it passed through is not skipped): the
                 // projection then pushes the air aside in front, draws it in behind (the wake) and sheds swirls at the
-                // sides
-                const float aB = clamp(along, -0.5 - g * dt, 0.7);
+                // sides. (1.6: that path is at most 1.2 m, whatever the frame time and the reading)
+                const float aB = clamp(along, -0.5 - min(g * dt, 1.2), 0.7);
                 const float2 eB = d - dir2 * aB;
                 const float wB = hw + 0.45;
                 const float kB = exp(-2.0 * dot(eB, eB) / (wB * wB)) * bodyK * (1.0 - exp(-dt * 30.0));
-                s.xy = lerp(s.xy, dir2 * min(g * rpMistF.z, RP_MIST_VMAX * 0.95), kB);
+                s.xy = lerp(s.xy, dir2 * min(g * rpMistF.z, RP_MIST_VMAX * 0.8), kB);
 
                 // spray: thrown up behind the tyre on a wet road (strength as the spray pass's plume), mostly low,
                 // higher up the faster the car
                 const float roadWet = saturate((tC[ti].y - 0.5) * 2.0);
                 const float speedK = smoothstep(rpMistE.y * 0.4, rpMistE.y + 7.0, v) * (0.8 + 0.2 * smoothstep(12.0, 34.0, v));
                 const float slip = saturate(abs(tread - g) / 6.0);
-                const float tyreK = rpMistE.x * speedK * (1.0 + slip) * roadWet;
+                // 1.6: the share of the spray that turns into mist hanging in the air needs air rushing past the tyre to
+                // tear the water sheet into fine drops. A tyre spinning on the spot throws mostly big drops that fall
+                // straight back: standing still, a third of what the same tread speed gives on the move.
+                const float atom = 0.3 + 0.7 * smoothstep(2.0, 12.0, g);
+                const float tyreK = rpMistE.x * speedK * (1.0 + slip) * roadWet * atom;
+                const float Ls = (0.3 + 0.05 * v) * max(rpMistE.z, 0.25);
+                const float wS = hw + 0.25 + 0.02 * v;                        // the spray fans out behind the tyre
                 if (tyreK > 0.001)
                 {
-                    const float Ls = (0.3 + 0.05 * v) * max(rpMistE.z, 0.25);
-                    const float aS = clamp(along, -Ls - g * dt, 0.0);
+                    const float aS = clamp(along, -Ls - min(g * dt, 1.2), 0.0);
                     const float2 eS = d - dir2 * aS;
-                    const float wS = hw + 0.25 + 0.02 * v;                    // the spray fans out behind the tyre
                     const float share = (l == 0) ? 1.0
                         : ((l == 1) ? 0.15 + 0.5 * smoothstep(8.0, 30.0, v) : 0.25 * smoothstep(14.0, 35.0, v));
                     s.z += rpMistC.z * tyreK * water * rpMistF.y * share * exp(-2.0 * dot(eS, eS) / (wS * wS)) * dt;
                 }
+                // 1.6: the water a spinning tread throws back drags the air behind the tyre with it (a few m/s at most),
+                // so the mist of a wheelspin streams away behind the car instead of piling up around a car that does not
+                // move (it had no air motion at all to carry it before)
+                const float slipV = max(tread - g, 0.0);
+                if (slipV > 1.0 && l < 2)
+                {
+                    const float aJ = clamp(along, -Ls, -0.3);
+                    const float2 eJ = d - dir2 * aJ;
+                    const float kJ = exp(-2.0 * dot(eJ, eJ) / (wS * wS)) * smoothstep(-0.1, -0.5, along)
+                                   * ((l == 0) ? 1.0 : 0.4) * roadWet * (1.0 - exp(-dt * 4.0));
+                    s.xy = lerp(s.xy, -dir2 * min(0.15 * slipV, 3.0), kJ);
+                }
             }
         }
     }
-    s.z = clamp(s.z, 0.0, RP_MIST_DMAX);
-    pfxOut[storePos] = rpMistPackState(s, plane);
+    s.xy = rpMistCapVel(s.xy, rpMistWind(l));
+    s.z = rpBadF(s.z) ? 0.0 : clamp(s.z, 0.0, RP_MIST_DMAX);
+    pfxOut[storePos] = rpMistPackState(s, plane, rpMistDither(t, kind));
 }

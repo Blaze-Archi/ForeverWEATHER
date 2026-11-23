@@ -304,6 +304,17 @@ float rpUnpack16(float2 p, float range)
 {
     return ((round(p.x * 255.0) + saturate(p.y)) / 255.0 - 0.5) * 2.0 * range;
 }
+// 1.6: the same with the low byte rounded stochastically (dither: a random number 0..1 per texel and frame). A slow decay
+// - air calming by under 1 % a frame - is smaller than one storage step near rest, so plain rounding wrote the same value
+// back every frame and a parked car's last wake never came to rest (a steady drift of a few cm/s that kept carrying the
+// mist). Rounded this way the stored value is right on average and keeps decaying, down to an incoherent noise floor.
+float2 rpPack16D(float x, float range, float dither)
+{
+    float u = saturate(x / range * 0.5 + 0.5) * 255.0;
+    float hi = min(floor(u), 254.0);
+    float lo = saturate(u - hi);
+    return float2(hi / 255.0, min(floor(lo * 255.0 + saturate(dither)) / 255.0, 1.0));
+}
 // height and vertical velocity of a packed water texel
 float2 rpWaveDecode(float4 t)
 {

@@ -157,7 +157,9 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     const int2 p = int2(storePos);
     const float4 src = colorTex.Load(int3(p, 0));
 
-    if (rpDropB.w < 0.001 || rpDropA.x < 0.001)
+    // 1.6: the pass also draws the body mist, so it only leaves early when there are neither beads nor mist
+    const bool beads = rpDropB.w >= 0.001 && rpDropA.x >= 0.001;
+    if (!beads && rpDropE.x < 0.001)
     {
         pfxOut[storePos] = src;
         return;
@@ -206,6 +208,9 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     float4 vPB[6] = { rpVehPB0, rpVehPB1, rpVehPB2, rpVehPB3, rpVehPB4, rpVehPB5 };
     float4 vPC[6] = { rpVehPC0, rpVehPC1, rpVehPC2, rpVehPC3, rpVehPC4, rpVehPC5 };
     float4 vPD[6] = { rpVehPD0, rpVehPD1, rpVehPD2, rpVehPD3, rpVehPD4, rpVehPD5 };
+    float4 vI[6] = { rpVehI0, rpVehI1, rpVehI2, rpVehI3, rpVehI4, rpVehI5 };
+    float vDew = 0.0;                                       // 1.6 body mist of the car found below
+    float vWarm = 0.0;
     float4 prA = float4(-100.0, -100.0, -100.0, -100.0);
     float4 prB = prA;
     float4 prC = prA;
@@ -261,6 +266,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
                 prB = vPB[i];
                 prC = vPC[i];
                 prD = vPD[i];
+                vDew = saturate(vI[i].x);
+                vWarm = saturate(vI[i].y);
             }
         }
     }
@@ -349,6 +356,38 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     const float underside = smoothstep(-0.45, -0.10, N.z);    // water drips off undersides: no beads there
     const float topK = smoothstep(0.35, 0.85, N.z);           // hood, roof, boot lid
     const bool atlasOK = rpAtlasValid();
+
+    // ---- 1.6 body mist --------------------------------------------------------------------------------------------
+    // Damp air condenses on a car that stands: a film of drops far too small to see one by one. It forms first where the
+    // body faces the open sky (the roof, the hood and the boot lid radiate their warmth away and cool below the air),
+    // barely on the sides and never underneath, and not on a hood an engine has just warmed. It does not hide the paint:
+    // the micro-drops break up the clear coat's sharp mirror image (softer, a touch dimmer and less saturated) and scatter
+    // a faint grey-white veil of daylight - plain to see on dark paint, nearly invisible on white, as on a real car on a
+    // misty morning. Beads, running drops and their trails drawn further down sit on top of it.
+    if (vDew > 0.001)
+    {
+        float dew = vDew * (0.15 + 0.85 * smoothstep(0.2, 0.85, N.z)) * underside * distFade;
+        // the hood (the front of the top; box axis 1 points to the rear) stays clear while the engine has it warm
+        const float hood = topK * (1.0 - smoothstep(-0.45, -0.25, lp.y / max(halfExt.y, 0.1)));
+        dew *= 1.0 - 0.9 * vWarm * hood;
+        // never even: a slow mottle across the panels
+        const float mott = 0.6 * rpValueNoise(pc * 1.7 + seed * 31.0) + 0.4 * rpValueNoise(pc * 5.3 + 7.0);
+        dew = saturate(dew * (0.65 + 0.7 * mott));
+        if (dew > 0.002)
+        {
+            const float3 soft = (rpDropLoad(p) * 2.0 + rpDropLoad(p + int2(2, 0)) + rpDropLoad(p - int2(2, 0))
+                               + rpDropLoad(p + int2(0, 2)) + rpDropLoad(p - int2(0, 2))) / 6.0;
+            col = lerp(col, soft, 0.45 * dew);
+            col = lerp(col, lerp(rpLuma(col).xxx, col, 0.7), 0.5 * dew);
+            col *= 1.0 - 0.06 * dew;
+            col += rpSkyColor(N) * (0.318 * 0.10 * dew);
+        }
+    }
+    if (!beads)
+    {
+        pfxOut[storePos] = float4(rpSafe(col, src.rgb), src.a);   // body mist only (no rain, or drops switched off)
+        return;
+    }
 
     float3 prk = float3(0.0, 0.0, 0.0);
     float3 pra = float3(0.0, 0.0, 0.0);

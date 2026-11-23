@@ -165,6 +165,14 @@ float2 rpGlassWater(float2 q, float aspectP)
     return float2(isfinite(r.x) ? max(r.x, 0.0) : 0.0, isfinite(r.y) ? saturate(r.y) : 0.0);
 }
 
+// 1.6 the mist on the glass at glass point q (pc units), from the same field (z): 0 clear .. 1.5 fogged over
+float rpGlassFog(float2 q, float aspectP)
+{
+    const float m = max(rpWindU.z, 1.0);
+    const float f = glassTexTex.SampleLevel(glassTex_sampler_, float2(q.x / aspectP, q.y) / (2.0 * m) + 0.5, 0).b;
+    return isfinite(f) ? clamp(f, 0.0, 1.5) : 0.0;
+}
+
 // 1.5.1: how far the running drops travelled in the last T seconds (glass units; rpWindV: every 0.5 s back to 4 s,
 // linear between; longer ago at the speed they have now)
 float2 rpTravel(float T)
@@ -909,6 +917,60 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 
     float3 col = src.rgb;
 
+    // ---- 1.6 glass fog -------------------------------------------------------------------------------------------------
+    // A fine mist on the outside of the glass (drizzle and fog drops too small to bead, condensation on glass the airflow
+    // cools). Where the glass water is simulated it comes from that field: the blades wipe it off, it comes back, running
+    // water cuts clear channels through it. Else it comes back since a blade last passed this point (rpWindW.y), or (side
+    // windows, no wipers) it is the pane's own level. Fogged glass blurs and softens what is seen through it - shapes stay,
+    // contrast goes, lights bloom into halos - and lays a milky veil of the light it scatters over it. The drops drawn
+    // further down stay clear in it, as real beads take the mist around them in.
+    float fogF = 0.0;
+    if (rpWindW.w > 0.0005)
+    {
+        if (useState)
+        {
+            fogF = rpGlassFog(pc, aspectP);
+        }
+        else if (nb > 0 && fmod(flags, 2.0) > 0.5)
+        {
+            fogF = rpWindW.x * (1.0 - exp(-min(ageP, 1e4) / max(rpWindW.y, 0.1)));
+        }
+        else
+        {
+            fogF = rpWindW.x;
+        }
+        // condensation is uneven: a slow mottle, a little more toward the frame (cooler glass, less airflow)
+        const float mott = 0.6 * rpValueNoise(pc * 2.3 + 17.0) + 0.4 * rpValueNoise(pc * 7.9 + 3.0);
+        const float edgeK = 1.0 + 0.3 * smoothstep(0.6, 1.0, max(abs(uv.x), abs(uv.y)));
+        fogF = saturate(fogF * rpWindW.w * edgeK * (0.75 + 0.5 * mott));
+        // the trails running drops leave are clear of it: the drop took the mist along
+        fogF *= 1.0 - 0.8 * saturate(trail * 1.5);
+    }
+    if (fogF * glass > 0.002)
+    {
+        // the blurred view: the Kawase chain when it ran this frame (divided by its cabin weight), else a small local blur
+        float3 blurC = rpWindBlur(p, 6);
+        if (rpWindW.z > 0.5)
+        {
+            const float2 vpB = (float2(p) + 0.5 - dispatchRect.xy) / max(dispatchRect.zw, float2(1.0, 1.0));
+            float4 bt = fogBlurTex.SampleLevel(fogBlur_sampler_, viewportCoordToRenderTarget(vpB, rtParams2), 0);
+            bt = rpWaveRaw(bt, abs(fogBlurTex.Load(int3(0, 0, 0)).r - 0.5) > 0.1);
+            if (bt.a > 0.02 && !rpBad3(bt.rgb))
+            {
+                blurC = max(bt.rgb / bt.a, 0.0);
+            }
+        }
+        // soft focus: even a light mist takes the edges and the contrast, a heavy one leaves only shapes and halos
+        float3 fogged = lerp(col, blurC, smoothstep(0.0, 0.6, fogF));
+        // the veil: light the mist scatters toward the eye. The mist is lit from outside (the sky over the glass); from
+        // the seat mostly the view's own light comes through it, from outside the window turns milky (the dark cabin
+        // behind it no longer shows)
+        const float3 amb = rpSkyColor(rpWindB.xyz) * 0.318;
+        const float3 veilC = lerp(rpLuma(blurC).xxx, amb, outside ? 0.55 : 0.2) * 1.03;
+        fogged = lerp(fogged, veilC, (outside ? 0.5 : 0.3) * fogF * fogF);
+        col = lerp(col, fogged, glass);
+    }
+
     // Thin water haze that builds up between wipes (slightly softens what is seen through the glass).
     float haze = saturate(rainRate * min(rpLandAge(ageP), 60.0) / 18.0) * 0.10 * saturate(rpWindF.z) * glass;
     // Smear right behind the blade: a water film that drains within a fraction of a second.
@@ -1132,6 +1194,18 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
         {
             col = lerp(col, float3(1.0, 0.1, 0.1) * B, 0.5 * aperture);
         }
+    }
+    if (rpMode.x > 23.5 && rpMode.x < 24.5)
+    {
+        // Debug 24 (1.6 glass fog): orange = mist on the glass (brighter = thicker), dark = clear; a cyan tint = the
+        // Kawase blur did not run this frame (the small local blur stands in)
+        float B = max(rpLuma(src.rgb), 0.05) * 2.0 * rpMode.w;
+        float3 c24 = lerp(float3(0.06, 0.06, 0.06) * B, float3(1.0, 0.55, 0.1) * B, saturate(fogF));
+        if (rpWindW.z < 0.5)
+        {
+            c24 = lerp(c24, float3(0.1, 0.8, 1.0) * B, 0.25);
+        }
+        col = lerp(src.rgb, c24, glass);
     }
 
     pfxOut[storePos] = float4(rpSafe(col, src.rgb), src.a);

@@ -7,7 +7,9 @@
 uniform_sampler2D(colorTex, 0);
 uniform_sampler2D(windDepth, 1);   // prepass depth: where the view really passes through the glass (1.0: slot 1, point
                                    // sampler, as in the puddle / droplet passes - on slot 4 it read as empty)
-uniform_sampler2D(maskTexA, 2);
+uniform_sampler2D(fogBlur, 2);     // 1.6 the frame through a Dual Kawase blur (#rpFogU1, rp_kawase.cs.hlsl), premultiplied
+                                   // by its cabin weight in alpha, for the fogged glass (linear sampler; this slot held an
+                                   // unused puddle mask until 1.5.2)
 uniform_sampler2D(glassTex, 3);    // 1.5 glass water on the windshield (#rpGlassB, rp_glass.cs.hlsl): x water, y film
                                    // (another pane: any texture, not read; this slot held an unused puddle mask)
 uniform_sampler2D(wiperTex, 4);
@@ -52,6 +54,9 @@ cbuffer perDraw : register(b0)
     uniform float4 rpWindV1;   //       last 0.5 s (V0.xy), 1 s (V0.zw), 1.5 s (V1.xy) .. 4 s (V3.zw): the water lines
     uniform float4 rpWindV2;   //       the blades leave run off along the same path
     uniform float4 rpWindV3;
+    uniform float4 rpWindW;    // 1.6 glass fog: x how fogged this pane is now (panes without simulated glass water), y how
+                               // long the mist takes to come back after a wipe (s), z 1 = the blur in fogBlur is drawn this
+                               // frame, w strength ('Glass fogging' amount; 0 = off)
 
     // Lighting globals the engine binds BY NAME. The Vulkan shader path does not declare them for us (the working
     // droplets header declares them for the same reason); without them rpSkyColor() fails to compile and the whole

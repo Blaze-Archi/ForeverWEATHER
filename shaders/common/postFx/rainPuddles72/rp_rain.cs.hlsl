@@ -234,8 +234,10 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
         const float3 lampC = lerp(avgC, maxC, 0.45 * nightK) * (0.45 + 2.05 * nightK);
         dropC = max(dropC, lampC);
         // clear water: colours blur together in the drop, it never makes them more saturated than the scene
-        dropC = lerp(rpLuma(dropC).xxx, dropC, 0.5) * rpRainB.w;
-        col = lerp(src.rgb, dropC, accA);
+        dropC = lerp(rpLuma(dropC).xxx, dropC, 0.5);
+        // 1.6 rpRainB.w: how much of the rain shows (was a brightness Lua always set to 1). Seen from the seat through a
+        // fogged windshield most of it is hidden: fewer streaks, not darker ones.
+        col = lerp(src.rgb, dropC, accA * saturate(rpRainB.w));
     }
 
     // Debug 19: the falling rain alone (white streaks) on black

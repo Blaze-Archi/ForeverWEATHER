@@ -15,19 +15,20 @@
 //   * water pushed or blown past the edge of the glass sits a while on the body beside it.
 // Glass coordinates (the field moves with the car); a step into #rpGlassA and a copy back into #rpGlassB each frame.
 
-// (water, film) of texel t; dry outside the field (water that leaves it has run off the car)
-float2 rpGlassLoad(int2 t, int2 n)
+// (water, film, 1.6 fog) of texel t; dry and clear outside the field (water that leaves it has run off the car)
+float3 rpGlassLoad(int2 t, int2 n)
 {
     if (any(t < 0) || any(t >= n))
     {
-        return float2(0.0, 0.0);
+        return float3(0.0, 0.0, 0.0);
     }
     const float4 v = glassPrev.Load(int3(t + int2(dispatchRect.xy), 0));
-    return float2(isfinite(v.x) ? clamp(v.x, 0.0, 4.0) : 0.0, isfinite(v.y) ? saturate(v.y) : 0.0);
+    return float3(isfinite(v.x) ? clamp(v.x, 0.0, 4.0) : 0.0, isfinite(v.y) ? saturate(v.y) : 0.0,
+                  isfinite(v.z) ? clamp(v.z, 0.0, 1.5) : 0.0);
 }
 
 // the same between texels (bilinear); s in field texture units (0..1)
-float2 rpGlassAt(float2 s, int2 n)
+float3 rpGlassAt(float2 s, int2 n)
 {
     const float2 g = s * float2(n) - 0.5;
     const float2 g0 = floor(g);
@@ -69,7 +70,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     if (rpGlassA.y > 0.5)
     {
         // the copy back into #rpGlassB
-        pfxOut[storePos] = float4(rpGlassLoad(t, n), 0.0, 1.0);
+        pfxOut[storePos] = float4(rpGlassLoad(t, n), 1.0);
         return;
     }
     if (rpGlassA.z < 0.5)
@@ -85,7 +86,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     const float2 uvG = ((float2(t) + 0.5) / float2(n) * 2.0 - 1.0) * m;  // glass uv (the pane is -1..1)
     const float2 pc = float2(uvG.x * aspectP, uvG.y);
     const float onGlass = rpPaneAperture(uvG, halfW, halfH);
-    const float2 old = rpGlassLoad(t, n);
+    const float3 old = rpGlassLoad(t, n);
 
     // ---- the water runs once the force on it (gravity, airflow, acceleration) beats its hold on the glass; the lines the
     // blades pushed together (big drops) go first
@@ -105,6 +106,24 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 
     // ---- it evaporates (slowly); on the body strip it runs off quicker
     W *= exp(-dt * (rpGlassB.z + 0.35 * (1.0 - onGlass)));
+
+    // ---- 1.6 glass fog: a fine mist on the outside of the glass (drizzle and fog drops too small to bead, condensation
+    // on glass cooled by the air rushing over it). It forms toward how fogged the glass gets in this air (rpGlassC.x, from
+    // Lua: humidity, rain, the clock, speed) and clears slowly when the air dries. Water that moves washes it off - a drop
+    // running down or up the glass cuts a clear channel, the lines the blades leave take the mist around them in - while a
+    // still film of beads only thins it. Left alone long enough, the mist grows into beads of its own, which join the
+    // water (and run once the force on them beats their hold). The blades clear it below.
+    float Fg = old.z;
+    {
+        const float tgt = max(rpGlassC.x, 0.0) * onGlass;
+        const float kF = (tgt > Fg) ? max(rpGlassC.y, 0.0) : max(rpGlassC.z, 0.0);
+        Fg += (tgt - Fg) * (1.0 - exp(-dt * kF));
+        const float washK = max(rpGlassC.w, 0.0) * saturate(W) * (0.12 + 2.5 * mobW) + 0.8 * saturate(W - 1.0);
+        Fg *= exp(-dt * washK);
+        const float grow = 0.035 * saturate((Fg - 0.55) / 0.45) * onGlass;     // fogged over: beads condense out of it
+        W += grow * dt * max(1.0 - W, 0.0) * 1.5;
+        Fg = clamp(Fg - grow * dt * 0.5, 0.0, 1.5);
+    }
 
     // ---- the blades: what one swept this frame is gone, with a film left behind, and piles up right ahead of it
     const float flags = rpWindE.w;
@@ -168,6 +187,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
             }
         }
         W = (swept > 0.5) ? 0.0 : W + gain;
+        Fg = (swept > 0.5) ? 0.0 : Fg;                                    // 1.6: the blade wipes the mist off too
     }
 
     // ---- 1.5.1: the water a blade pushed into a line beyond the end of its sweep runs off (the windshield pass draws its
@@ -178,5 +198,5 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     // ---- the film beads up and dries in about a second (quicker in the airflow)
     S *= exp(-dt * (1.0 + rpWindG.x / 25.0) / 1.2);
 
-    pfxOut[storePos] = float4(clamp(W, 0.0, 4.0), saturate(S), 0.0, 1.0);
+    pfxOut[storePos] = float4(clamp(W, 0.0, 4.0), saturate(S), clamp(Fg, 0.0, 1.5), 1.0);
 }

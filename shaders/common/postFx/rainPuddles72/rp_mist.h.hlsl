@@ -28,6 +28,10 @@ cbuffer perDraw : register(b0)
     uniform float4 rpMistF;   // x turbulent diffusion of the mist (m^2/s), y spray thrown per second (density / s at
                               // full strength), z share of a car's speed the air around it takes, w strength of the
                               // pressure step (1 = fully incompressible layers)
+    uniform float4 rpMistG;   // 1.6 stability: x share of the last frame's pressure the first Jacobi iteration starts
+                              // from, y fastest tyre (ground or tread, m/s) the forcing believes, z fallout of dense mist
+                              // (1/s per unit of density), w air speed (m/s) below which vorticity confinement fades out
+    uniform float4 rpMistH;   // 1.6 x frame number (seeds the stochastic rounding of the stored air speed)
 
     // tyres (same layout as the spray and puddle passes): A = contact point + half tread width, B = direction xy +
     // ground speed + tread speed, C = radius, active (0.5 + 0.5 x road wetness), spray clock, seed
