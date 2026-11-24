@@ -23,6 +23,10 @@ on:
         description: 'Publish as a pre-release (untested build). Untick only for a build tested in game.'
         type: boolean
         default: true
+      retag:
+        description: 'Re-spin an existing PRE-release from the selected commit: its tag moves there (never a final one)'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -76,6 +80,7 @@ jobs:
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
+          RETAG: ${{ github.event.inputs.retag }}
         run: |
           set -e
           VERSION="${TAG#v}"
@@ -87,6 +92,16 @@ jobs:
             TITLE="ForeverWEATHER $VERSION"
           fi
           if gh release view "$TAG" > /dev/null 2>&1; then
+            if [ "$RETAG" = "true" ]; then
+              # re-spin: only a release that is a pre-release and stays one; its tag moves to the commit built here, so
+              # the tag, its source archives and the zip agree (pushed with this run's token: no new run is triggered)
+              if [ "$PRERELEASE" != "true" ] || [ "$(gh release view "$TAG" --json isPrerelease --jq .isPrerelease)" != "true" ]; then
+                echo "retag is only for pre-releases" >&2
+                exit 1
+              fi
+              git tag -f "$TAG" "$GITHUB_SHA"
+              git push -f origin "refs/tags/$TAG"
+            fi
             gh release upload "$TAG" dist/ForeverWEATHER.zip --clobber
             gh release edit "$TAG" --title "$TITLE" --notes-file dist/notes.md $FLAG
           else

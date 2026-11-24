@@ -1,7 +1,7 @@
 # ForeverWEATHER 1.6.1
 
 Rain on the glass in two layers. After every pass the wiped glass gathers fresh drops. Left alone, it merges back into
-the glass around it with no seam. Also three fixes.
+the glass around it with no seam. Also four fixes, one of them for the rain sound.
 
 **Pre-release: untested.** This version has not been tested in game. It was checked outside the game only (see
 *How it was checked* below). Please report bugs in the [Issues tab](https://github.com/Blaze-Archi/ForeverWEATHER/issues).
@@ -52,8 +52,17 @@ body mist, rain sound, calmer puddles, mist fixes), which was also never tested 
   - Normal driving, puddles included, throws the mist it did in 1.5.2: within -0.1 % to +3.6 % on the solver's numpy
     port, with the same peak density. Static wheelspin stays fixed (peak density 2.25 down to 0.56).
   - The puddle spray itself, the extra spray through a puddle, comes from the spray pass, which 1.6 never changed.
+- **Rain sound: the drumming on the roof no longer jingles.** From the driver's seat it sounded like metal jingling.
+  - Every drop on the roof was one of six synthesised metal pings at 1.7 to 3.6 kHz, ringing with a few bell-like
+    overtones.
+  - Now it is rain drumming on a lined steel roof: a dense patter of short, dull taps in 32 variants, the bigger drops
+    with a quick thump of the panel that dies out within a few cycles (no pitch, no ring), over a low rush. The roof
+    lining softens everything above about 2.5 kHz.
+  - It is about as loud as before, so the mix is unchanged. Only the roof loop changed (`rain_roof.ogg`).
+  - (Added to 1.6.1-pre after its first build: the release was re-spun with it.)
 - **Release workflow:** a tag with a suffix, like `v1.6.1-pre`, now passes the version check. The workflow run for
-  `v1.6.0-pre` failed on it, and that release was published by hand.
+  `v1.6.0-pre` failed on it, and that release was published by hand. A manual run can now also re-spin a pre-release
+  from a newer commit (*retag*: its tag moves to that commit; never for a final release).
 
 ## Technical
 
@@ -104,8 +113,14 @@ Outside the game only, so it needs testing in game:
   accelerating hard during a sweep.
 - The mist change was checked on the numpy port of one layer of the mist solver: rolling at 18 to 130 km/h, the same
   with three times the spray, static wheelspin, a reset spike, and a car driving then parking.
-- **Not checked:** anything on screen. That includes how the drops look as the layers merge, the growth of new drops,
-  and the game's own shader compiler (DX12 / Vulkan).
+- The roof loop was measured, decoded from the .ogg, against the 1.6.0 one:
+  - its sharpest tonal line fell from +8.1 dB to +0.9 dB, so it has no pitched ringing left;
+  - its loudest moments are as noise-like as plain rain (tonality 0.58, from 0.35; plain noise is about 0.56);
+  - the energy above 2 kHz fell from 12.9 % to 4.1 %;
+  - the taps are as distinct as before, the A-weighted level is within 0.6 dB and the loop has no click.
+- **Not checked:** anything on screen or through the speakers in game. That includes how the drops look as the
+  layers merge, the growth of new drops, the new roof sound in the game's mix, and the game's own shader compiler
+  (DX12 / Vulkan).
 
 ## Made with AI
 

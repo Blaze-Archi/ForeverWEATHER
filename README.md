@@ -119,6 +119,7 @@ compiled old one.
   wiped.
 - **Simulated mist:** 1.6.0's wheelspin fix now only affects a spinning tyre; normal driving, puddles included, throws
   the mist it did in 1.5.2.
+- **Rain sound:** the drumming on the roof from the driver's seat no longer sounds like metal jingling.
 
 Full notes: [docs/history/CHANGES_v1.6.1.md](docs/history/CHANGES_v1.6.1.md).
 
@@ -330,6 +331,8 @@ the version in `mod_info`, the Lua and the UI, compiles every Lua file with LuaJ
 builds `ForeverWEATHER.zip` with `tools/build_release.py` and publishes it as a **GitHub pre-release**. The release notes open
 with a notice that the build is untested and that bugs go to the Issues tab, and the zip carries the same notice
 (`PRERELEASE_README.txt`). A final release is only made by running the workflow by hand with *prerelease* unticked.
+A pre-release can be re-spun from a newer commit by running it by hand with *retag* ticked: its tag moves to that
+commit and the zip and the notes are replaced (never for a final release).
 Locally: `python3 tools/build_release.py` builds the same zip into `release/`.
 
 ## Animated Wipers
