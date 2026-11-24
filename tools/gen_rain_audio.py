@@ -8,7 +8,7 @@ drop impact is added modulo the buffer length, so the end runs seamlessly into t
   rain_light.ogg    sparse drops ticking on the ground and leaves, a soft hiss behind them
   rain_heavy.ogg    a downpour: a dense roar of countless drops with a low rush under it
   rain_muffled.ogg  that downpour heard through a roof or a car body (low-passed, the highs gone)
-  rain_roof.ogg     drops drumming on a car's roof heard from inside: short metallic ticks over a dull rush
+  rain_roof.ogg     rain drumming on a car's roof heard from inside: dense, dull taps over a low rush (1.6.1)
 
 Usage:  python3 tools/gen_rain_audio.py [out_dir]       (needs numpy; ffmpeg with libvorbis for the .ogg files)
 """
@@ -78,15 +78,19 @@ def grain_noise(ms, lo, hi):
     return g / (np.std(g) + 1e-12) * env
 
 
-def grain_metal(freq, ms):
-    """A drop on sheet metal: a damped ring of a few partials and a short thud."""
-    m = int(SR * ms / 1000.0)
+def grain_tap(ms, lo, hi, thump_hz, thump_ms, thump_amp):
+    """1.6.1: a drop on a car's roof heard from inside: a short, dull tap (band-limited noise - the headliner takes the
+    highs) and, the bigger the drop, a quick thump of the panel. The thump is damped within a few cycles (Q of about 1 to
+    4), so it has no pitch and does not ring: a lined steel roof drums under rain, it does not jingle."""
+    tap = grain_noise(ms, lo, hi)
+    m = max(len(tap), int(SR * thump_ms * 6 / 1000.0))
     t = np.arange(m) / SR
     out = np.zeros(m)
-    for k, (mul, a) in enumerate([(1.0, 1.0), (2.31, 0.5), (3.87, 0.3), (5.12, 0.18)]):
-        out += a * np.sin(2 * np.pi * freq * mul * t + rng.uniform(0, 2 * np.pi)) * np.exp(-t / (ms / 1000.0 / (2.5 + k)))
-    thud = np.sin(2 * np.pi * rng.uniform(120, 220) * t) * np.exp(-t / 0.012)
-    return out * 0.6 + thud * 0.9
+    out[:len(tap)] += tap
+    if thump_amp > 0.0:
+        out += (thump_amp * np.sin(2 * np.pi * thump_hz * t + rng.uniform(0, 2 * np.pi))
+                * np.exp(-t / (thump_ms / 1000.0)) * (1.0 - np.exp(-t / 0.0006)))
+    return out
 
 
 def drops(n, rate, grains, amp_shape=2.5):
@@ -139,11 +143,19 @@ def circular_filter(x, shape):
 
 
 def roof():
-    grains = [grain_metal(rng.uniform(1700, 3600), rng.uniform(18, 40)) for _ in range(6)]
-    ticks = drops(N, 140, grains, 2.4)
-    ticks = circular_filter(ticks, lambda f: lowpass(f, 5000, 1))          # heard from inside, the cabin takes the edge
-    rush = shaped_noise(N, lambda f: highpass(f, 60) * lowpass(f, 900)) * 0.5
-    return ticks + rush
+    # 1.6.1: rain drumming on a car's roof heard from inside. A dense patter of short, dull taps, the bigger drops with a
+    # quick, heavily damped thump of the panel, over the low rush of the drumming; the lined roof softens everything
+    # above about 2.5 kHz and the cabin adds a little low boom. Dozens of different taps, each on a random train of its
+    # own, so nothing repeats and nothing rings. (1.6.0: six ringing metal pings at 1.7 to 3.6 kHz - it jingled.)
+    taps = drops(N, 600, [grain_tap(rng.uniform(0.8, 2.5), rng.uniform(200, 400), rng.uniform(1300, 2800),
+                                    rng.uniform(120, 260), rng.uniform(2.0, 4.0), rng.uniform(0.0, 0.5))
+                          for _ in range(32)], 3.0)
+    big = drops(N, 45, [grain_tap(rng.uniform(3.0, 6.0), rng.uniform(100, 200), rng.uniform(800, 1500),
+                                  rng.uniform(80, 170), rng.uniform(4.0, 7.0), rng.uniform(0.8, 1.4))
+                        for _ in range(16)], 2.2) * 0.8
+    rush = shaped_noise(N, lambda f: highpass(f, 60) * lowpass(f, 700) * pink(f) ** 0.5) * 0.35
+    return circular_filter(taps + big + rush,
+                           lambda f: lowpass(f, 2500, 2) * (1.0 + 0.35 * np.exp(-((f - 170.0) / 110.0) ** 2)))
 
 
 def write_wav(path, x):
