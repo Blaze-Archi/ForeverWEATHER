@@ -57,6 +57,10 @@ cbuffer perDraw : register(b0)
     uniform float4 rpWindW;    // 1.6 glass fog: x how fogged this pane is now (panes without simulated glass water), y how
                                // long the mist takes to come back after a wipe (s), z 1 = the blur in fogBlur is drawn this
                                // frame, w strength ('Glass fogging' amount; 0 = off)
+    uniform float4 rpWindX;    // 1.6.1 the pane's rain clock (rpWindH.z) since its wiper's current cycle began (x) and
+                               // the clock's rate then (y); since the cycle before began (z) and the rate then (w). Every
+                               // blade pass is part of the sweep at the start of its cycle: see rpRainSince
+    uniform float4 rpWindY;    // 1.6.1 x seconds since the cycle before began (1e5 = there was none), yzw unused
 
     // Lighting globals the engine binds BY NAME. The Vulkan shader path does not declare them for us (the working
     // droplets header declares them for the same reason); without them rpSkyColor() fails to compile and the whole

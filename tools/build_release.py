@@ -5,6 +5,7 @@ shaders/, ui/), and optionally checks that every place that names the version ag
   python3 tools/build_release.py                         -> release/ForeverWEATHER.zip (a pre-release build)
   python3 tools/build_release.py --out dist/X.zip        -> another path
   python3 tools/build_release.py --check-version 1.6.0   -> fail unless mod_info, the Lua and the UI all say 1.6.0
+                                                          (a tag may carry a suffix: v1.6.1-pre checks 1.6.1)
   python3 tools/build_release.py --final                 -> no pre-release notice in the zip (a tested release)
 
 A pre-release build carries PRERELEASE_README.txt at the root of the zip: it says the build is untested and where to
@@ -97,6 +98,11 @@ def build(out_path, version, prerelease):
     return len(files) + (1 if prerelease else 0)
 
 
+def tag_version(tag):
+    """The version a tag names: v1.6.1-pre -> 1.6.1, 1.6.0 -> 1.6.0."""
+    return re.split(r'[-+]', tag.strip().lstrip('vV'), maxsplit=1)[0]
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--out', default=os.path.join(ROOT, 'release', 'ForeverWEATHER.zip'))
@@ -111,7 +117,9 @@ def main():
             print('  %-50s %s' % (k, v), file=sys.stderr)
         return 1
     version = found.pop()
-    if a.check_version and a.check_version.lstrip('v') != version:
+    # 1.6.1: a tag may name the kind of build after the version (v1.6.1-pre, v1.5.2-alpha): the version is what
+    # comes before the first '-' or '+'
+    if a.check_version and tag_version(a.check_version) != version:
         print('the tag says %s but the mod says %s (mod_info, Lua and UI agree on it)' % (a.check_version, version),
               file=sys.stderr)
         return 1

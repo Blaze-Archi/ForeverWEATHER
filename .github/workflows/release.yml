@@ -1,14 +1,14 @@
 # ForeverWEATHER release build.
 #
-# Push a tag like v1.6.0 (or run the workflow by hand from the Actions tab) and this builds ForeverWEATHER.zip and
+# Push a tag like v1.6.1-pre (or run the workflow by hand from the Actions tab) and this builds ForeverWEATHER.zip and
 # publishes it as a GitHub PRE-RELEASE: the release is marked as a pre-release, its notes open with a notice that the
 # build is untested and that bugs go to the Issues tab, and the zip carries the same notice (PRERELEASE_README.txt).
 # Only a manual run with "prerelease" unticked publishes a final release (for a build that has been tested in game).
 #
-# Before anything is published: every version string must match the tag, every Lua file must compile under LuaJIT (the
-# game's Lua; this also catches the 200-local limit of the main chunk) and every compute shader must compile with
-# glslang's HLSL front end against stand-in engine headers (tools/ci/shader_stubs: syntax and types only - the game's own
-# compiler still has the last word).
+# Before anything is published: every version string must match the tag (v1.6.1-pre: 1.6.1), every Lua file must
+# compile under LuaJIT (the game's Lua; this also catches the 200-local limit of the main chunk) and every compute
+# shader must compile with glslang's HLSL front end against stand-in engine headers (tools/ci/shader_stubs: syntax
+# and types only - the game's own compiler still has the last word).
 name: Release
 
 on:

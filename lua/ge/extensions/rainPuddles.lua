@@ -26,7 +26,7 @@ local TAG = 'rainPuddles'
 -- shader file changed (measured: edited shaders kept running in their old form across restarts until that cache was
 -- cleared). A new path makes every player's game compile the 1.0 shaders instead of reusing cached 0.9 ones.
 -- Rename the folder again whenever the shaders change in a release.
-local shaderDir = 'shaders/common/postFx/rainPuddles72/'
+local shaderDir = 'shaders/common/postFx/rainPuddles73/'
 local maskDir = '/art/rainPuddles/'
 local wiperMaskPath = maskDir .. 'wiper_sweep.data.png'
 local settingsFile = '/settings/rainPuddles.json'
@@ -347,7 +347,7 @@ local accelState = {}   -- [vehicle id] = last velocity + low-passed acceleratio
 local JUMP = { vids = {}, tyreHold = {}, hold = 0.6 }
 local frameDtSim = 0
 local frameId, camFrame = 0, -1
-local VERSION = '1.6.0'
+local VERSION = '1.6.1'
 local MAX_VEH_PUDDLES = 12   -- vehicles kept off the puddle / wet-ground pass (must match rp_puddles.h.hlsl)
 local MAX_VEH_DROPS = 6      -- vehicles with body droplets (must match rp_droplets.h.hlsl)
 local PROFILE_N = 16         -- roof-line samples per vehicle (must match rp_droplets.cs.hlsl)
@@ -3801,6 +3801,41 @@ end
 
 local WIPER = { park = 0.06, range = 1.75 }   -- tandem blades: parked pointing right, sweep ~100 deg up to the left
 
+-- 1.6.1 the rain on a pane since its wiper's current cycle began and the rain clock's rate then, the same for the cycle
+-- before, and how long ago the cycle before began (rain-clock units: the pane's own clock, which counts the rain landing
+-- on that glass and stops under a roof). Every blade pass is part of a sweep (a second or so) at the start of its
+-- cycle, so the shader puts the clock at a pass at the clock when the cycle began plus that rate times the seconds into
+-- it (rpRainSince): fixed once the pass is done, so from then on the rain since it counts exactly with the clock,
+-- whatever the rain and the speed do. Stamped on the cycle count; a cycle that began between two frames is stamped with
+-- the clock as it was then, at the rate it has now. Returns the two constants (rpWindX, rpWindY).
+function WIPER.rainConsts(flow, wip)
+  local now = tonumber(flow and flow.clock) or 0
+  if not (flow and wip and wip.everWiped and (wip.cycles or 0) > 0 and (wip.cycleStart or -1e9) > -1e8) then
+    return fmt4(0, 0, 0, 0), fmt4(1e5, 0, 0, 0)
+  end
+  local rate = tonumber(flow.rate) or 0
+  local st = flow.wipeRain
+  if not st then
+    st = {}
+    flow.wipeRain = st
+  end
+  if st.cycles ~= wip.cycles then
+    if st.cycles and wip.cycles == st.cycles + 1 then
+      -- the next cycle: the one that ran until now becomes the cycle before
+      st.pAt, st.p0, st.pR = st.at, st.c0, st.r0
+    elseif st.cycles then
+      -- several cycles at once (a hitch) or a new count: the cycle before began a period earlier
+      st.pAt = wip.cycleStart - math.max(wip.period or 1, wip.sweepT or 1)
+      st.p0, st.pR = (now - rate * math.max(TS - st.pAt, 0)) % 8192, rate
+    end
+    st.cycles, st.at = wip.cycles, wip.cycleStart
+    st.c0, st.r0 = (now - rate * math.max(TS - wip.cycleStart, 0)) % 8192, rate
+  end
+  local cur = (now - st.c0) % 8192
+  if not st.p0 then return fmt4(cur, st.r0, 0, 0), fmt4(1e5, 0, 0, 0) end
+  return fmt4(cur, st.r0, (now - st.p0) % 8192, st.pR), fmt4(math.min(TS - st.pAt, 1e5), 0, 0, 0)
+end
+
 -- Constants for one pane of glass (1.0: the windshield, and the rear / hatch glass through a second pass of the same
 -- shader). W = the pane in world space (or nil = nothing to draw), flow = its drop physics, wip = its wiper timeline (nil:
 -- this pane has no wipers, drops only turn over naturally).
@@ -3863,6 +3898,10 @@ local function glassConsts(fx, W, flow, wip)
   fx:setShaderConst('$rpWindN', fmt4(flow.fa, flow.fb, flow.life, shB))      -- w (1.0): out from under it since
   fx:setShaderConst('$rpWindO', fmt4(flow.ox, flow.oy, flow.vx, flow.vy))
   WAVE.travelConsts(fx, flow)                                         -- 1.5.1 rpWindV0..3
+  -- 1.6.1 the rain since the wiper's cycles began and the rain clock's rate then (the two layers of drops: rpRainSince)
+  local rainX, rainY = WIPER.rainConsts(flow, wip)
+  fx:setShaderConst('$rpWindX', rainX)
+  fx:setShaderConst('$rpWindY', rainY)
   local windshield = W     -- (the code below reads the pane under this name)
   if quad then
     fx:setShaderConst('$rpWindJ', fmt4(quad[1], quad[2], quad[3], quad[4]))   -- bottom-left, bottom-right (glass uv)

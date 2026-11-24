@@ -2,10 +2,11 @@
 """Writes the GitHub release notes for a version: the pre-release notice first (untested, report bugs in the Issues
 tab), then the version's change log (docs/history/CHANGES_v<version>.md).
 
-  python3 tools/release_notes.py 1.6.0 [--repo owner/name] [--final] > notes.md
+  python3 tools/release_notes.py 1.6.0 [--repo owner/name] [--final] > notes.md   (also 1.6.1-pre: the notes of 1.6.1)
 """
 import argparse
 import os
+import re
 import sys
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -18,6 +19,7 @@ def main():
     ap.add_argument('--final', action='store_true', help='a tested release: no pre-release notice')
     a = ap.parse_args()
     version = a.version.lstrip('v')
+    base = re.split(r'[-+]', version, maxsplit=1)[0]   # 1.6.1: v1.6.1-pre -> the change log of 1.6.1
     issues = 'https://github.com/%s/issues' % a.repo
     out = []
     if not a.final:
@@ -31,7 +33,7 @@ def main():
             '> lines of `beamng.log`). The zip carries the same notice (`PRERELEASE_README.txt`).',
             '',
         ]
-    path = os.path.join(ROOT, 'docs', 'history', 'CHANGES_v%s.md' % version)
+    path = os.path.join(ROOT, 'docs', 'history', 'CHANGES_v%s.md' % base)
     if os.path.exists(path):
         with open(path, encoding='utf-8') as f:
             body = f.read().strip().splitlines()

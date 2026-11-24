@@ -4,12 +4,12 @@
 
 Falling rain, wet roads, puddles with reflections, node-based hydroplaning, body droplets, rain on the windshield, rear and side windows with real wipers, fogged glass, rain you can hear, lens drops, dry tunnels and tyre spray.
 
-A graphics and physics mod for **BeamNG.drive 0.40.x** (version 1.6.0, **pre-release**). Everything is drawn by the mod's
+A graphics and physics mod for **BeamNG.drive 0.40.x** (version 1.6.1, **pre-release**). Everything is drawn by the mod's
 own compute shaders and Lua; it needs no other mod.
 
 > **DX12 and Vulkan only.** DX11 doesn't support SSR on BeamNG.drive currently, and the mod utilizes SSR for the puddles.
 > 
-> **Pre-release: untested.** New builds are published as GitHub pre-releases, and 1.6.0 has not been tested in game
+> **Pre-release: untested.** New builds are published as GitHub pre-releases, and 1.6.1 has not been tested in game
 > yet. Expect bugs, and please report them in the [Issues tab](https://github.com/Blaze-Archi/ForeverWEATHER/issues)
 > (there is a *Bug report* form).
 >
@@ -105,6 +105,22 @@ The repository root has the same layout as the zip (`art/`, `lua/`, `mod_info/`,
 copy of it in `mods/unpacked/foreverweather/` also works for development. After editing a shader, rename its folder
 (`shaders/common/postFx/rainPuddlesNN`) and `shaderDir` in `lua/ge/extensions/rainPuddles.lua`, or the game keeps the
 compiled old one.
+
+## What's new in 1.6.1
+
+**Pre-release: untested in game.** Please report bugs in the [Issues tab](https://github.com/Blaze-Archi/ForeverWEATHER/issues).
+
+- **Glass drops in two layers.** After every pass the wiped glass gathers fresh drops, each landing at its own moment
+  (sooner in heavy rain and when driving into it), small at first and growing. Left alone, they give way spot by spot
+  to the very drops of the glass the blades never reach, so the wiped arc merges back into the glass around it with
+  no seam, until the next wipe starts it over.
+- **Steadier drops on wiped glass.** They no longer come and go when you speed up or slow down (the rain since a wipe
+  is now read off the glass's own rain clock), and the drops ahead of the blades no longer change just before they are
+  wiped.
+- **Simulated mist:** 1.6.0's wheelspin fix now only affects a spinning tyre; normal driving, puddles included, throws
+  the mist it did in 1.5.2.
+
+Full notes: [docs/history/CHANGES_v1.6.1.md](docs/history/CHANGES_v1.6.1.md).
 
 ## What's new in 1.6.0
 
@@ -273,7 +289,7 @@ Full notes: [docs/history/CHANGES_v1.2.0.md](docs/history/CHANGES_v1.2.0.md).
 - The simulated ripples are off while the 'Surroundings' reflection fallback is in use (they share a texture slot of the puddle pass); the drawn ripples show then.
 - The glass water covers the windshield and the rear glass; the side windows keep the earlier model. A rear wiper was not tested on a car that has one (it uses the front wipers' code).
 - The mist is simulated within about 40 m around the camera (a little ahead of it); spray farther away is the drawn plume only.
-- 1.6.0 is a pre-release and has not been tested in game: the glass fog, the body mist, the rain sound and the mist fixes were only checked outside the game (see its change log).
+- 1.6.0 and 1.6.1 are pre-releases and have not been tested in game: the glass fog, the body mist, the rain sound, the mist fixes and the two-layer glass drops were only checked outside the game (see their change logs).
 - Only the outside of the glass fogs. Mist inside a cabin (breath, wet clothes), which no wiper reaches, is not drawn.
 - The glass fog's blur levels are sized relative to the frame (the post effects' `targetScale`). Should a build of the game ignore that, the levels come out full size: the same look, at a higher cost.
 - The rain sound is ambient (2D): it is not placed where the rain falls, and it follows the camera's shelter, not every surface around it. Under a very wide roof that ends just beyond the 26 m grid the open rain can be quieter than it should be.
@@ -297,7 +313,7 @@ the ground gets wet and dries, the puddles and the spray. On every other map it 
 | `lua/ge/extensions/rainPuddlesAudio.lua` | rain sound: FMOD loops mixed by the rain and the shelter around the listener |
 | `lua/vehicle/extensions/rainPuddlesHydroVeh.lua` | hydroplaning, vehicle side: contact-patch nodes, water depth, lift and drag at the physics rate |
 | `lua/vehicle/extensions/` (other files) | wheel / windshield probe, the optional Animated Wipers bridge |
-| `shaders/common/postFx/rainPuddles72/` | compute shaders: puddles + wet ground, simulated ripples, body droplets + body mist, glass + glass water + glass fog, Dual Kawase blur, falling rain, spray + simulated mist, lens |
+| `shaders/common/postFx/rainPuddles73/` | compute shaders: puddles + wet ground, simulated ripples, body droplets + body mist, glass + glass water + glass fog, Dual Kawase blur, falling rain, spray + simulated mist, lens |
 | `ui/ui-vue/mods/RainPuddles/` | settings panel (Pause menu > Mods > ForeverWEATHER) |
 | `art/rainPuddles/` | puddle masks (and their raw fields for the physics), droplet atlas, wiper sweep texture |
 | `art/sound/rainPuddles/` | the rain loops (synthesised by `tools/gen_rain_audio.py`) |
@@ -309,9 +325,9 @@ the ground gets wet and dries, the puddles and the spray. On every other map it 
 
 ## Releases
 
-Pushing a tag like `v1.6.0` runs `.github/workflows/release.yml`: it checks that the tag matches the version in
-`mod_info`, the Lua and the UI, compiles every Lua file with LuaJIT and every shader with glslang, builds
-`ForeverWEATHER.zip` with `tools/build_release.py` and publishes it as a **GitHub pre-release**. The release notes open
+Pushing a tag like `v1.6.1-pre` runs `.github/workflows/release.yml`: it checks that the tag (less its suffix) matches
+the version in `mod_info`, the Lua and the UI, compiles every Lua file with LuaJIT and every shader with glslang,
+builds `ForeverWEATHER.zip` with `tools/build_release.py` and publishes it as a **GitHub pre-release**. The release notes open
 with a notice that the build is untested and that bugs go to the Issues tab, and the zip carries the same notice
 (`PRERELEASE_README.txt`). A final release is only made by running the workflow by hand with *prerelease* unticked.
 Locally: `python3 tools/build_release.py` builds the same zip into `release/`.

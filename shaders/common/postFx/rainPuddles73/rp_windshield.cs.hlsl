@@ -13,6 +13,8 @@
 // * Wipers: timeline from Lua (rpWindE). For every point of the glass the shader knows how many seconds ago a blade
 //   last passed; a drop that landed before that pass is gone, so the glass clears exactly where the car's own blades
 //   (measured from its wiper mesh) sweep, at the wiper speed in use. No blades are drawn.
+// * 1.6.1 two layers: the wiped glass gathers fresh drops, which then give way, cell by cell, to the very beads of the
+//   glass the blades never reach, so a wiped arc left alone merges back into the glass around it with no seam.
 // * Drops move like the body droplets (1.0): beads stick until the force on them (gravity, airflow, the car's
 //   acceleration; rpWindN from Lua) beats their adhesion - big ones go first, small ones stay; running drops on two
 //   grids that translate along the glass (rpWindO, integrated in Lua, so there is no cut-off at any speed) streak into
@@ -147,13 +149,57 @@ float rpWindAdhesion(float rad, float baseRad)
     return 3.75 * pow(baseRad / max(rad, 1e-5), 1.2);
 }
 
-// 1.0 tunnels: of the time since a blade last passed (age, s), how long rain could land: the time the car spent under
-// a roof does not count (rpWindI.y = it went under one this long ago, rpWindN.w = came out this long ago, 0 = still /
-// never). Drops that landed before the roof stay until a blade wipes them.
-float rpLandAge(float age)
+// 1.6.1 how much rain (rain-clock units) landed on a point of the glass since a blade last passed it, age seconds ago
+// (1e5 and more: never). From the pane's own rain clock, stamped by Lua when each wiper cycle began, with the clock's rate
+// then (rpWindX): a pass is part of the sweep at the start of its cycle, a second or so, so the clock at the pass is the
+// stamp plus that rate times the seconds into the cycle. That stays fixed once the pass is done, so the rain since it
+// counts on exactly with the clock - also when the rain or the speed changes. The clock stops under a roof (1.0 tunnels:
+// no rain lands there; the drops that landed before stay until a blade wipes them). (Up to 1.6.0 it was the rain rate
+// now times the time since the pass less the time under a roof, so fresh drops came and went when the car sped up or
+// slowed down.)
+float rpRainSince(float age, float tc, float sweepT)
 {
-    float a = min(age, 1e4);
-    return max(a - max(0.0, min(a, rpWindI.y) - rpWindN.w), 0.0);
+    if (!(age < 1e5))
+    {
+        return 1e4;
+    }
+    float r;
+    if (age <= tc)
+    {
+        r = rpWindX.x - rpWindX.y * clamp(tc - age, 0.0, sweepT);           // a pass of the current cycle
+    }
+    else
+    {
+        r = rpWindX.z - rpWindX.w * clamp(rpWindY.x - age, 0.0, sweepT);    // a pass of the cycle before
+    }
+    return isfinite(r) ? max(r, 0.0) : 1e4;
+}
+
+// 1.6.1 rpWipeAll for the beads, plus which pass that was: all the passes over q so far, counted so that a pass of the
+// cycle before is the last of that cycle (every blade that reaches q passes it twice a cycle). The drops a pass leaves
+// keep their identity until the next pass, also when a new cycle begins before a blade is back at q. (Up to 1.6.0 they
+// changed at every cycle start, so the drops ahead of the blades swapped places just before they were wiped.)
+void rpWipeLast(float2 q, int nb, float4 bq[4], float2 brr[4], float4 bph, float4 tl, float cycles, out float wipeAge,
+                out float passId, out float wiped)
+{
+    wipeAge = 1e6;
+    wiped = 0.0;
+    float passSum = 0.0;
+    float nReach = 0.0;
+    [unroll]
+    for (int bj = 0; bj < 4; bj++)
+    {
+        if (bj < nb)
+        {
+            float psJ = 0.0, rcJ = 0.0;
+            const float agJ = rpWipeAge(q, bq[bj], brr[bj], bph[bj], tl.x, tl.y, tl.z, tl.w, psJ, rcJ);
+            wipeAge = min(wipeAge, agJ);
+            wiped = max(wiped, rcJ);
+            passSum += psJ;
+            nReach += rcJ;
+        }
+    }
+    passId = max(cycles - 1.0, 0.0) * 2.0 * nReach + passSum;
 }
 
 // 1.5 glass water (rp_glass.cs.hlsl) at glass point q (pc units): x the water there (0 dry / just wiped .. 1 beaded all
@@ -362,9 +408,17 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     const float range = rpWindH.y;
     const float rainClock = rpWindH.z;
     const float rainRate = max(rpWindH.w, 0.05);
-    const float gen0 = rpWindI.x;                                // passes completed before this cycle (x2 per cycle)
+    const float gen0 = rpWindI.x;                                // wiper cycles begun so far (this one included)
     const bool atlasOK = rpAtlasValid();
     const float4 tl4 = float4(tc, sweepT, period, flags);
+    // 1.6.1 the same timeline for how long ago a blade passed a point, with the cycle before as it really was (rpWindY.x:
+    // seconds since it began - also a single wipe, or the last cycle before the wipers were switched off and on again),
+    // so a point the blades have not reached yet in this cycle still knows when it was wiped last. (Up to 1.6.0 only a
+    // repeating run knew; elsewhere such a point counted as never wiped until the blade came.)
+    const bool prevK = rpWindY.x < 99999.0;
+    const float flagsW = flags - 2.0 * fmod(floor(flags / 2.0), 2.0) - 4.0 * fmod(floor(flags / 4.0), 2.0)
+                       + (prevK ? 6.0 : 0.0);
+    const float4 tlW = float4(tc, sweepT, prevK ? max(rpWindY.x - tc, sweepT) : period, flagsW);
 
     // Wiper blades (rp_pane.h.hlsl): the car's own, or the procedural tandem pair mirrored for RHD; none on the rear /
     // hatch glass without a wiper
@@ -434,7 +488,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
         if (bi < nb)
         {
             float psI = 0.0, rcI = 0.0;
-            float agI = rpWipeAge(pc, bq[bi], brr[bi], bph[bi], tc, sweepT, period, flags, psI, rcI);
+            float agI = rpWipeAge(pc, bq[bi], brr[bi], bph[bi], tlW.x, tlW.y, tlW.z, tlW.w, psI, rcI);
             if (agI < ageP)
             {
                 ageP = agI;
@@ -488,20 +542,24 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
                 float reachR = max(r0 * 2.6, (minPx + 0.1) * mppU);   // biggest bead (1.85 r0) plus its creep
                 if (dot(dq0, dq0) < reachR * reachR)
                 {
-                    // when did a blade last pass this bead -> which generation of drops lives there now
-                    float wipeAge = 1e6, passSum = 0.0, wiped = 0.0;
-                    rpWipeAll(cen, nb, bq, brr, bph, tl4, wipeAge, passSum, wiped);
-                    float landed = rainRate * rpLandAge(wipeAge);      // rain clock elapsed since the last wipe here
-                    float genId = gen0 * 8.0 + passSum;               // changes on every pass of any blade
-                    float fadeOut = 1.0;
-                    if (wiped < 0.5)
-                    {
-                        // never wiped: slow natural turnover, staggered per cell
-                        float tv = rainClock / 25.0 + rpRand(rpPcg(hs ^ 0x68E31DA4u));
-                        genId = -1000.0 - floor(tv);
-                        landed = frac(tv) * 25.0;
-                        fadeOut = 1.0 - smoothstep(22.0, 25.0, landed);
-                    }
+                    // 1.6.1 two layers, one pattern. Layer 1 is the glass where no blade comes by: each cell holds one
+                    // bead at a time, which lands, stays and gives way to the next one on a slow turnover cycle of the
+                    // cell's own (25 rain-clock units, staggered per cell). Layer 2 is what a blade leaves: a fresh set
+                    // of drops lands on the wiped glass, each at its own moment (sooner in heavy rain and when driving
+                    // into it), and grows. When the cell's cycle turns over, the fresh drop gives way like any other and
+                    // the bead that follows is layer 1's own, so a wiped arc left alone becomes the glass around it
+                    // again, cell by cell, with no seam and no jump; the next pass starts layer 2 over. (Up to 1.6.0
+                    // every pass gave the arc a set of drops of its own for good: it never became the glass around it.)
+                    float wipeAge = 1e6, passId = 0.0, wiped = 0.0;
+                    rpWipeLast(cen, nb, bq, brr, bph, tlW, gen0, wipeAge, passId, wiped);
+                    const float tv = rainClock / 25.0 + rpRand(rpPcg(hs ^ 0x68E31DA4u));
+                    const float cyc = frac(tv) * 25.0;                       // rain clock into the cell's cycle
+                    const float rainW = rpRainSince(wipeAge, tc, sweepT);    // rain since a blade last passed here
+                    // layer 2 while the last pass came after the cell's cycle began, layer 1 from its next turnover on
+                    const bool fresh = (wiped > 0.5) && (rainW < cyc);
+                    const float genId = fresh ? passId : (-1000.0 - floor(tv));
+                    const float landed = fresh ? rainW : cyc;               // rain clock since these drops began to land
+                    const float fadeOut = 1.0 - smoothstep(22.0, 25.0, cyc); // the turnover: the bead gives way
                     uint hg = rpPcg(hs + uint(int(genId) + 1048576) * 0x9E3779B1u);
                     float r1 = rpRand(hg);
                     float r4 = rpRand(rpPcg(hg ^ 0x85EBCA6Bu));
@@ -509,17 +567,21 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
                     float r6 = rpRand(rpPcg(hg ^ 0x165667B1u));
                     float since = landed - r5 * 2.2;                   // rain-clock units since this bead landed
                     float grow = smoothstep(0.0, 0.25, since) * fadeOut;
-                    float rawRad = r0 * (0.40 + 1.45 * r4 * r4);      // many small beads, a few big merged drops
-                    // 1.5 glass water: the water there now decides which beads show - rain landing on wiped glass, water
-                    // running in with gravity and the airflow - instead of each bead's own landing time. Where a blade
-                    // is pushing the water together right now (above 1, inside its sweep) the drops are big and merged.
+                    // many small beads, a few big merged drops; 1.6.1: a drop lands small and grows as the rain landing
+                    // after it joins it (a big merged drop takes longest)
+                    float rawRad = r0 * (0.40 + 1.45 * r4 * r4)
+                                 * lerp(0.6, 1.0, smoothstep(0.0, (r4 > 0.82) ? 3.0 : 1.2, since));
+                    // 1.5 glass water: on wiped glass the water there now decides which of the pass's drops show - rain
+                    // landing, water running in with gravity and the airflow - instead of each drop's own landing time
+                    // (1.6.1: layer 1's beads land on their own clock, as without glass water). Where a blade is pushing
+                    // the water together right now (above 1, inside its sweep) the drops are big and merged.
                     // (1.5.1: the line it leaves beyond the end of its sweep is drawn below as water lines whose drops
                     // run off; up to 1.5.0 it was big beads here that only ever faded in place.)
                     float wat = 1.0;
                     if (useState)
                     {
                         wat = rpGlassWater(cen, aspectP).x;
-                        grow = fadeOut;
+                        grow = fresh ? fadeOut : grow;
                         rawRad *= 1.0 + 0.7 * saturate(wat - 1.0) * wiped;
                     }
                     float adh = rpWindAdhesion(rawRad, r0);
@@ -637,12 +699,13 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
                             else
                             {
                                 float wipeAge = 1e6, passSum = 0.0, wiped = 0.0;
-                                rpWipeAll(cen, nb, bq, brr, bph, tl4, wipeAge, passSum, wiped);
+                                rpWipeAll(cen, nb, bq, brr, bph, tlW, wipeAge, passSum, wiped);
                                 if (wiped > 0.5)
                                 {
-                                    // wiped glass: the drop has to land after the last pass where it is now
+                                    // wiped glass: the drop has to land after the last pass where it is now (1.6.1: the
+                                    // rain that really landed since, so a change of speed no longer makes it come and go)
                                     float del = r5 * 1.5;
-                                    a *= smoothstep(del, del + 0.25, rainRate * rpLandAge(wipeAge));
+                                    a *= smoothstep(del, del + 0.25, rpRainSince(wipeAge, tc, sweepT));
                                 }
                             }
                             if (a > 0.001)
@@ -972,7 +1035,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     }
 
     // Thin water haze that builds up between wipes (slightly softens what is seen through the glass).
-    float haze = saturate(rainRate * min(rpLandAge(ageP), 60.0) / 18.0) * 0.10 * saturate(rpWindF.z) * glass;
+    float haze = saturate(rpRainSince(ageP, tc, sweepT) / 18.0) * 0.10 * saturate(rpWindF.z) * glass;
     // Smear right behind the blade: a water film that drains within a fraction of a second.
     float smearT = 0.12 + 0.45 * saturate(rpWindF.x);
     float ruP = saturate(length(pc - pivP) / rOutP);
