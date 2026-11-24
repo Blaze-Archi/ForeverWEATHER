@@ -74,9 +74,12 @@ The causes, and what 1.6 does about each:
   player's car the air starts again from calm. A speed no car reaches (over 150 m/s) is treated as no motion, and the
   shader keeps its own limits (the fastest tyre it believes, at most 1.2 m of path per frame).
 - **A wheel spinning on the spot** threw mist with no air motion to carry it away, so it piled up toward the top of
-  the range. Now the share that becomes hanging mist needs air rushing past the tyre (standing still, a third of it),
-  the spinning tread drags the air behind it (the mist streams away), and dense mist falls out (its drops meet and
-  rain back onto the road).
+  the range. Now a tyre spinning over the ground turns less of its spray into hanging mist (standing still, a third
+  of it: no air rushes past to tear the water into fine drops), the spinning tread drags the air behind it (the mist
+  streams away), and very dense mist falls out (its drops meet and rain back onto the road).
+- **Normal driving is left as it was.** Only the slip counts: a tyre rolling normally throws exactly the mist it did
+  in 1.5.2, on the road and through puddles, and the mist of normal driving never gets dense enough to fall out. The
+  extra spray through puddles comes from the spray pass, which 1.6 does not change.
 - **A parked car's wake never came to rest.** The air calms by under 1 % a frame, less than one storage step near
   rest, so rounding wrote the same value back and a coherent drift of a few cm/s stayed for good. The stored air speed
   is now rounded stochastically, so it keeps decaying to an incoherent noise floor.
@@ -109,8 +112,9 @@ There is a *Bug report* form in the Issues tab.
 - Body mist: `rpDropE`, `rpVehI0..5` (mist, hood heat) in the droplet pass. The pass now also runs with no rain while
   there is body mist (bead density 0 when *Body drops* is off).
 - Mist: new `rpMistG` (warm-start share 0.85 in the first Jacobi iteration, tyre speed cap 90 m/s, fallout 0.6 / s per
-  unit of density, confinement fades out below 1.2 m/s) and `rpMistH` (frame, dither seed); `rpPack16D` in
-  `rp_lib.h.hlsl`. Paused (no time step), the pressure and the projection leave the air as it is.
+  unit of density above 1, confinement fades out below 1.2 m/s) and `rpMistH` (frame, dither seed); `rpPack16D` in
+  `rp_lib.h.hlsl`. Paused (no time step), the pressure and the projection leave the air as it is. The mist share of
+  a tyre's spray is `1 - 0.7 * slip * (1 - smoothstep(2, 12, ground speed))` (1 for a tyre that rolls).
 - Ripples: `WAVE.rainK = 0.5` on the drops' impact depth (`rpWaveD.w`) and the drawn rings' strength (`rpPuddleB.y`).
 - Falling rain: `rpRainB.w` is now how much of the rain shows (was a brightness Lua always set to 1).
 - Rain sound: `lua/ge/extensions/rainPuddlesAudio.lua` (its own extension), `art/sound/rainPuddles/*.ogg` (synthesised
@@ -134,8 +138,9 @@ Outside the game only, so it needs testing in game:
 - Every compute shader compiles to SPIR-V with glslang's HLSL front end against stand-in engine headers. The 1.5.2
   shaders compile against the same headers, which shows they match the real ones closely enough.
 - The mist fix was checked on a numpy port of one layer of the mist solver (same grid, packing, forcing, pressure
-  solve). Reset spike: 1.5.2 3.5x the mist and faster air, 1.6 normal decay even without the tyre hold. Static
-  wheelspin: peak density 2.25 down to 0.46, and the mist now streams away. Parked: the frozen residual drift goes from
+  solve). Reset spike: 1.5.2 about 3x the mist and faster air, 1.6 normal decay even without the tyre hold. Static
+  wheelspin: peak density 2.25 down to 0.56, and the mist now streams away. Normal driving from 18 to 130 km/h, also
+  with three times the spray (as through puddles): within -0.1 % to +3.6 % of 1.5.2's mist, about the same peak. Parked: the frozen residual drift goes from
   0.021 m/s (coherent) to 0.007 m/s (noise).
 - Not checked: anything on screen or through the speakers. That includes the look of the fog, the blur and the body
   mist; whether this build of the game honours `targetScale` for the blur levels (if not, they come out full size: a

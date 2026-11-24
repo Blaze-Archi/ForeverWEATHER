@@ -3322,8 +3322,8 @@ WAVE.ms = { N = 128, dx = 40 / 128, jacobi = 14, shader = 'RainPuddles_MistShade
             ocx = nil, ocy = nil, lox = nil, loy = nil, sx = 0, sy = 0, fdt = 0, fresh = 0,
             zc = nil, xc = 0, yc = 0, gx = 0, gy = 0,
             -- 1.6 stability (rpMistG): the warm start of the pressure solve, the fastest tyre the forcing believes (m/s),
-            -- the fallout of dense mist (1/s per unit of density), the air speed (m/s) below which vorticity confinement
-            -- fades out; px/py: the camera last frame (a jump re-fits the road plane at once)
+            -- the fallout of dense mist (1/s per unit of density above 1), the air speed (m/s) below which vorticity
+            -- confinement fades out; px/py: the camera last frame (a jump re-fits the road plane at once)
             warm = 0.85, vCap = 90, fallout = 0.6, calm = 1.2, px = nil, py = nil }
 function WAVE.mistName(k) return 'RainPuddles_Mist' .. k end
 function WAVE.mistPasses() return WAVE.ms.jacobi + 3 end            -- advection, divergence, pressure .., projection

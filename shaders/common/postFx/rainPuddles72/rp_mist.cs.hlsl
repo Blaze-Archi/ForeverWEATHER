@@ -267,11 +267,12 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     }
 
     // the air calms toward the wind, the mist evaporates.
-    // 1.6: dense mist also falls out (rpMistG.z): in a thick cloud the fine drops meet and grow until they rain back onto
-    // the road. Thin trails keep their ~1.5 s; a cloud fed in one place (a wheelspin standing still) levels off at about
-    // half the density it reached before, instead of piling up to the range limit.
+    // 1.6: very dense mist also falls out (rpMistG.z, above a density of 1): in a thick cloud the fine drops meet and grow
+    // until they rain back onto the road. The mist of normal driving (on the road and through puddles) stays below that
+    // and keeps its ~1.5 s exactly as before; only a cloud fed in one place (a wheelspin standing still) is held back
+    // instead of piling up to the range limit.
     s.xy = lerp(s.xy, rpMistWind(l), 1.0 - exp(-dt * rpMistD.w));
-    s.z *= exp(-dt * (rpMistB.w + max(rpMistG.z, 0.0) * max(s.z, 0.0)));
+    s.z *= exp(-dt * (rpMistB.w + max(rpMistG.z, 0.0) * max(s.z - 1.0, 0.0)));
 
     // cars and tyres
     const float2 Pw = (rpMistC.xy + float2(c) + 0.5) * dx;          // this cell's centre in the world
@@ -305,17 +306,18 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
                 const float2 eB = d - dir2 * aB;
                 const float wB = hw + 0.45;
                 const float kB = exp(-2.0 * dot(eB, eB) / (wB * wB)) * bodyK * (1.0 - exp(-dt * 30.0));
-                s.xy = lerp(s.xy, dir2 * min(g * rpMistF.z, RP_MIST_VMAX * 0.8), kB);
+                s.xy = lerp(s.xy, dir2 * min(g * rpMistF.z, RP_MIST_VMAX * 0.9), kB);
 
                 // spray: thrown up behind the tyre on a wet road (strength as the spray pass's plume), mostly low,
                 // higher up the faster the car
                 const float roadWet = saturate((tC[ti].y - 0.5) * 2.0);
                 const float speedK = smoothstep(rpMistE.y * 0.4, rpMistE.y + 7.0, v) * (0.8 + 0.2 * smoothstep(12.0, 34.0, v));
                 const float slip = saturate(abs(tread - g) / 6.0);
-                // 1.6: the share of the spray that turns into mist hanging in the air needs air rushing past the tyre to
-                // tear the water sheet into fine drops. A tyre spinning on the spot throws mostly big drops that fall
-                // straight back: standing still, a third of what the same tread speed gives on the move.
-                const float atom = 0.3 + 0.7 * smoothstep(2.0, 12.0, g);
+                // 1.6: a tyre spinning on the spot throws mostly big drops that fall straight back (no air rushing past
+                // to tear the water sheet into fine mist): while it spins over the ground, down to a third of the mist.
+                // Only the slip counts - a tyre rolling normally (tread speed = ground speed) throws exactly what it did,
+                // at any speed, on the road and in puddles.
+                const float atom = 1.0 - 0.7 * slip * (1.0 - smoothstep(2.0, 12.0, g));
                 const float tyreK = rpMistE.x * speedK * (1.0 + slip) * roadWet * atom;
                 const float Ls = (0.3 + 0.05 * v) * max(rpMistE.z, 0.25);
                 const float wS = hw + 0.25 + 0.02 * v;                        // the spray fans out behind the tyre
